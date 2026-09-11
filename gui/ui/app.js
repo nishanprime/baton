@@ -1381,6 +1381,7 @@ function policyWords(p) {
   const parts = [`Keeping the newest ${plural(p.keepCount ?? 0, 'snapshot')}`];
   parts.push(p.maxTotalMb > 0 ? `up to ${p.maxTotalMb}MB` : 'with no size budget');
   parts.push(p.maxAgeDays > 0 ? `for ${plural(p.maxAgeDays, 'day')}` : 'with no age limit');
+  if (p.maxCount > 0) parts.push(`and never more than ${p.maxCount} in all`);
   // Nothing prunes on a timer today, so this does not claim it does.
   return `${parts.join(', ')}. Anything outside that goes when you prune.`;
 }
@@ -1397,10 +1398,12 @@ function viewBackups() {
     ? tilde(snapshots[0].dir.slice(0, snapshots[0].dir.lastIndexOf('/')))
     : tilde(`${state.status?.appHome ?? ''}/backups`);
 
-  const overBudget = stats.overBudget
+  // wouldPrune can be above zero while the size budget is still fine — an age
+  // or count limit bites on its own, and saying nothing would hide that.
+  const pending = stats.overBudget || (stats.wouldPrune ?? 0) > 0
     ? `<div class="row" style="border-color:var(--warn)">
          <div class="grow">
-           <div class="name">Over budget</div>
+           <div class="name">${stats.overBudget ? 'Over budget' : 'Outside the policy'}</div>
            <div class="meta wrap">${plural(stats.wouldPrune ?? 0, 'snapshot')} would go if you pruned now.</div>
          </div>
          <button class="btn tiny" id="prune">Prune now</button>
@@ -1424,7 +1427,7 @@ function viewBackups() {
   return `
     <h2>Backups <span class="count">${plural(stats.count ?? 0, 'snapshot')} · ${esc(fmtBytes(stats.totalBytes ?? 0))}</span></h2>
     <div class="hint" style="margin-top:0">${esc(policyWords(policy))}</div>
-    ${overBudget}
+    ${pending}
     <div class="actions">
       <button class="btn ghost" id="pruneBtn">Prune…</button>
     </div>
@@ -1557,6 +1560,8 @@ function viewSettings() {
     <h2>Backups</h2>
     ${number('backups.keepCount', 'Keep the newest',
       'Snapshots always kept, whatever the size or age limits say.', b.keepCount ?? 0)}
+    ${number('backups.maxCount', 'Never keep more than',
+      'A hard ceiling on how many snapshots exist at all. 0 means no ceiling.', b.maxCount ?? 0)}
     ${number('backups.maxTotalMb', 'Size budget (MB)',
       'Oldest go first once the tree is bigger than this. 0 means no size limit.', b.maxTotalMb ?? 0)}
     ${number('backups.maxAgeDays', 'Maximum age (days)',
