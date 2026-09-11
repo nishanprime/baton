@@ -1,6 +1,7 @@
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
+import { backupEntry } from './backups.ts';
 
 /**
  * Config root for VS Code-family editors. Every fork keeps its per-user
@@ -79,13 +80,14 @@ export function isSymlink(p: string): boolean {
   }
 }
 
-/** Timestamped copy of a file into the backups dir, before we modify it. */
-export function backupFile(file: string, tag: string): string | undefined {
-  if (!exists(file)) return undefined;
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const dir = path.join(backupsPath(), stamp);
-  fs.mkdirSync(dir, { recursive: true });
-  const dest = path.join(dir, `${tag}-${path.basename(file)}`);
-  fs.copyFileSync(file, dest);
-  return dest;
+/**
+ * Back a file up before modifying it.
+ *
+ * Delegates rather than stamping its own timestamp. Doing that per call is what
+ * scattered a single operation's backups across sibling directories and left
+ * unlabelled one-file dirs behind; going through backups.ts means this joins
+ * whatever snapshot the operation already has open.
+ */
+export function backupFile(file: string, tag: string): string | null {
+  return backupEntry(file, tag);
 }

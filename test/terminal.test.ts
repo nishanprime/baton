@@ -322,10 +322,19 @@ function runWrapped(shell: 'zsh' | 'bash', command: string, env: Record<string, 
 }
 
 for (const shell of ['bash', 'zsh'] as const) {
-  test(`${shell} wrapper applies use to the current shell`, { skip: !SHELL_BIN[shell] }, () => {
-    const run = runWrapped(shell, 'baton use work; printf "rc=%s acct=%s dir=%s" "$?" "$BATON_ACCOUNT" "$CLAUDE_CONFIG_DIR"');
+  test(`${shell} wrapper applies env to the current shell`, { skip: !SHELL_BIN[shell] }, () => {
+    const run = runWrapped(shell, 'baton env work; printf "rc=%s acct=%s dir=%s" "$?" "$BATON_ACCOUNT" "$CLAUDE_CONFIG_DIR"');
     assert.match(run.stdout, /rc=0 acct=work dir=\/Users\/x\/\.claude-testing new/);
-    assert.deepEqual(run.log, [`use work --shell ${shell}`]);
+    assert.deepEqual(run.log, [`env work --shell ${shell}`]);
+  });
+
+  test(`${shell} wrapper does NOT intercept use`, { skip: !SHELL_BIN[shell] }, () => {
+    // use rebinds editors, not this shell. Evaluating its output would at best
+    // print a parse error and at worst rewrite every editor's settings while
+    // the user was asking about one terminal tab.
+    const run = runWrapped(shell, 'baton use work; printf "rc=%s acct=[%s]" "$?" "$BATON_ACCOUNT"');
+    assert.deepEqual(run.log, ['use work'], 'reaches the binary unmodified, with no --shell');
+    assert.match(run.stdout, /acct=\[\]/, 'this shell is left alone');
   });
 
   test(`${shell} wrapper passes other subcommands straight through`, { skip: !SHELL_BIN[shell] }, () => {
@@ -340,8 +349,8 @@ for (const shell of ['bash', 'zsh'] as const) {
     assert.match(run.stdout, /rc=7/);
   });
 
-  test(`${shell} wrapper keeps a failing use's exit code and evals nothing`, { skip: !SHELL_BIN[shell] }, () => {
-    const run = runWrapped(shell, 'baton use work; printf "rc=%s acct=[%s]" "$?" "$BATON_ACCOUNT"', { FAKE_FAIL: '1' });
+  test(`${shell} wrapper keeps a failing env's exit code and evals nothing`, { skip: !SHELL_BIN[shell] }, () => {
+    const run = runWrapped(shell, 'baton env work; printf "rc=%s acct=[%s]" "$?" "$BATON_ACCOUNT"', { FAKE_FAIL: '1' });
     assert.match(run.stdout, /rc=3 acct=\[\]/);
   });
 
@@ -350,11 +359,11 @@ for (const shell of ['bash', 'zsh'] as const) {
     assert.match(help.stdout, /HELP TEXT/);
     assert.deepEqual(help.log, ['--help']);
 
-    // The interesting one: help for a subcommand the wrapper does intercept.
+    // The interesting one: help for the subcommand the wrapper does intercept.
     // If it were eval'd, "HELP TEXT" would vanish into a command-not-found.
-    const useHelp = runWrapped(shell, 'baton use --help');
-    assert.match(useHelp.stdout, /HELP TEXT/);
-    assert.deepEqual(useHelp.log, ['use --help']);
+    const envHelp = runWrapped(shell, 'baton env --help');
+    assert.match(envHelp.stdout, /HELP TEXT/);
+    assert.deepEqual(envHelp.log, ['env --help']);
   });
 
   test(`${shell} wrapper handles a bare "baton"`, { skip: !SHELL_BIN[shell] }, () => {
@@ -364,14 +373,14 @@ for (const shell of ['bash', 'zsh'] as const) {
   });
 
   test(`${shell} wrapper forwards flags and puts the emit flag last`, { skip: !SHELL_BIN[shell] }, () => {
-    const run = runWrapped(shell, 'baton use work --dry-run >/dev/null 2>&1');
-    assert.deepEqual(run.log, [`use work --dry-run --shell ${shell}`]);
+    const run = runWrapped(shell, 'baton env work --provider claude >/dev/null 2>&1');
+    assert.deepEqual(run.log, [`env work --provider claude --shell ${shell}`]);
   });
 
   test(`${shell} prompt helper is empty off-account and bracketed on one`, { skip: !SHELL_BIN[shell] }, () => {
     const off = runWrapped(shell, 'printf "[%s]" "$(baton_prompt)"');
     assert.match(off.stdout, /^\[\]/);
-    const on = runWrapped(shell, 'baton use work >/dev/null 2>&1; printf "%s" "$(baton_prompt)"');
+    const on = runWrapped(shell, 'baton env work >/dev/null 2>&1; printf "%s" "$(baton_prompt)"');
     assert.match(on.stdout, /\[work\]/);
   });
 }

@@ -27,9 +27,15 @@ interface CacheEntry {
   perModel: Record<string, TokenCounts & { turns: number }>;
   firstAt: string | null;
   lastAt: string | null;
+  /**
+   * Project name as the history listing spells it — the basename of the
+   * session's cwd, not the mangled directory name the transcript lives in.
+   * Stored so a --project filter here matches what the user saw there.
+   */
+  project: string | null;
 }
 
-const CACHE_VERSION = 1;
+const CACHE_VERSION = 2;
 const cacheFile = () => path.join(appHome(), 'cache', 'usage-index.json');
 
 function loadCache(): Record<string, CacheEntry> {
@@ -77,9 +83,15 @@ function scanFile(file: string): CacheEntry | null {
   const perModel: Record<string, TokenCounts & { turns: number }> = {};
   let firstAt: string | null = null;
   let lastAt: string | null = null;
+  let cwd: string | null = null;
 
   for (const line of text.split('\n')) {
     if (!line) continue;
+    if (!cwd && line.includes('"cwd"')) {
+      try {
+        cwd = (JSON.parse(line) as { cwd?: string }).cwd ?? null;
+      } catch { /* keep scanning */ }
+    }
     if (line.includes('"timestamp"') && (!firstAt || !lastAt)) {
       // fall through to the parse below
     } else if (!line.includes('"usage"')) {
@@ -112,12 +124,36 @@ function scanFile(file: string): CacheEntry | null {
     acc.cacheRead += Number(usage.cache_read_input_tokens ?? 0);
   }
 
+  const project = cwd ? path.basename(cwd) : null;
   return Object.keys(perModel).length
-    ? { mtimeMs: 0, size: 0, perModel, firstAt, lastAt }
-    : { mtimeMs: 0, size: 0, perModel: {}, firstAt, lastAt };
+    ? { mtimeMs: 0, size: 0, perModel, firstAt, lastAt, project }
+    : { mtimeMs: 0, size: 0, perModel: {}, firstAt, lastAt, project };
 }
 
-export function buildUsageReport(providers: Provider[]): UsageReport {
+export interface UsageFilter {
+  /** Project directory name, as shown in the history listing. */
+  project?: string;
+  /** ISO date; conversations last touched before this are excluded. */
+  since?: string;
+  /** ISO date; conversations last touched after this are excluded. */
+  until?: string;
+}
+
+/**
+ * Token totals, optionally narrowed.
+ *
+ * Filtering is per conversation, not per turn: a transcript is in or out whole,
+ * decided by when it was last written. A session spanning midnight therefore
+ * lands entirely in one day. That is coarse, and it is honest — the alternative
+ * is re-reading every turn's timestamp on every call, which is what the cache
+ * exists to avoid.
+ *
+ * There is deliberately no per-account filter. Transcripts never recorded which
+ * account produced them and pooling merged them, so an account breakdown of
+ * existing history cannot be reconstructed. See attribution.ts, which records
+ * it going forward.
+ */
+export function buildUsageReport(providers: Provider[], filter: UsageFilter = {}): UsageReport {
   const cache = loadCache();
   const fresh: Record<string, CacheEntry> = {};
   const totalsByModel: Record<string, TokenCounts & { turns: number }> = {};
@@ -158,6 +194,19 @@ export function buildUsageReport(providers: Provider[]): UsageReport {
         fresh[file] = entry;
 
         if (!Object.keys(entry.perModel).length) continue;
+
+        if (
+          filter.project &&
+          entry.project !== filter.project &&
+          path.basename(dir) !== filter.project &&
+          dir !== filter.project
+        ) {
+          continue;
+        }
+        const touched = entry.lastAt ?? entry.firstAt;
+        if (filter.since && (!touched || touched < filter.since)) continue;
+        if (filter.until && (!touched || touched > filter.until)) continue;
+
         conversations++;
         if (entry.firstAt && (!firstAt || entry.firstAt < firstAt)) firstAt = entry.firstAt;
         if (entry.lastAt && (!lastAt || entry.lastAt > lastAt)) lastAt = entry.lastAt;

@@ -71,7 +71,11 @@ function cmdStatus(): void {
   const data = PROVIDERS.map((provider) => {
     const accounts = provider.discoverAccounts();
     const hosts = provider.discoverHosts();
-    return { provider, accounts, hosts };
+    const sessions = findLiveSessions([provider], accounts);
+    // Polling here as well as in `sessions` is what makes attribution fill in
+    // during ordinary use rather than only when someone goes looking.
+    recordObservation(provider, sessions);
+    return { provider, accounts, hosts, sessions, here: currentAccountFromEnv(provider) };
   });
 
   if (asJson) {
@@ -98,6 +102,8 @@ function cmdStatus(): void {
           ...h,
           accountId: accounts.find((a) => a.configDir === h.configDir)?.id ?? null,
         })),
+        sessions: data.find((d) => d.provider.id === provider.id)?.sessions ?? [],
+        terminal: data.find((d) => d.provider.id === provider.id)?.here ?? null,
       })),
     });
     return;
@@ -124,6 +130,21 @@ function cmdStatus(): void {
       const warn = h.inconsistent ? yellow('  ⚠ settings keys disagree — run `baton doctor`') : '';
       console.log(`  ${h.label.padEnd(18)} ${label}${warn}`);
     }
+    const d = data.find((x) => x.provider.id === provider.id);
+    console.log(`\n ${bold('This terminal')}`);
+    console.log(
+      d?.here
+        ? `  ${green(d.here)} ${dim(`via ${provider.envVar}`)}`
+        : dim(`  no account set — ${provider.label} would use the default`),
+    );
+
+    if (d?.sessions.length) {
+      console.log(`\n ${bold('Running now')}`);
+      for (const sn of d.sessions) {
+        console.log(`  pid ${String(sn.pid).padEnd(8)} ${green(sn.accountId ?? 'unknown')} ${dim(sn.editorHint ?? '')}`);
+      }
+    }
+
     console.log(`\n ${bold('Shared store')}  ${dim(sharedStore(provider.id))}\n`);
   }
 }
@@ -385,6 +406,8 @@ function cmdAutoswitch(): void {
   const hosts = provider.discoverHosts().filter((h) => h.configDir);
   const state = loadState();
 
+  recordObservation(provider, findLiveSessions([provider], accounts));
+
   const windowMinutes = Number(flagValue('--since') ?? 30);
   const events = findLimitEvents([provider], { sinceMinutes: windowMinutes });
   const newest = events[0];
@@ -471,6 +494,13 @@ const STATE_LABEL: Record<string, string> = {
 function cmdAccounts(): void {
   const provider = resolveProvider();
   const accounts = provider.discoverAccounts();
+
+  // Shell completions call this; one bare id per line, nothing else on stdout.
+  if (flags.has('--ids')) {
+    for (const a of accounts) console.log(a.id);
+    return;
+  }
+
   const settings = loadSettings();
   const statuses = classifyAccounts(provider, accounts);
 
@@ -545,6 +575,36 @@ function cmdRemove(): void {
   for (const w of result.warnings) console.log(yellow(`  ⚠ ${w}`));
 }
 
+function cmdRename(): void {
+  const provider = resolveProvider();
+  const [key, newId] = positional.slice(1);
+  if (!key || !newId) throw new Error('Usage: baton rename <account> <new-name> [--confirm]');
+  const account = findAccount(provider.discoverAccounts(), key);
+  // Without --confirm this is a preflight: renameAccount reports and moves nothing.
+  const plan = renameAccount(provider, account, newId, {
+    confirm: flags.has('--confirm') && !dryRun,
+    force: flags.has('--force'),
+  });
+
+  if (asJson) return emit({ ok: true, ...plan });
+
+  console.log(`${bold(account.id)} → ${bold(newId)}  ${dim(plan.toDir)}`);
+  for (const b of plan.blockers) console.log(`  ${yellow('✗')} ${b.message}`);
+  for (const c of plan.consequences) console.log(`  ${yellow('•')} ${c.detail}`);
+  for (const k of plan.settingsReferences) {
+    console.log(`  ${yellow('•')} settings key ${k} still names the old id`);
+  }
+  if (!plan.moved) {
+    console.log(dim('\nNothing changed. Re-run with --confirm to apply.'));
+    console.log(dim('For a display-only change that touches no paths, use `baton alias`.'));
+  } else {
+    console.log(green('\n✓ renamed.'));
+    for (const h of plan.rebind) {
+      console.log(yellow(`  ⚠ re-point ${h.label}: baton use ${newId} --host ${h.id}`));
+    }
+  }
+}
+
 // ---------------------------------------------------------------- health
 
 function cmdHealth(): void {
@@ -583,15 +643,29 @@ function cmdSessions(): void {
 
 function cmdUsage(): void {
   const provider = resolveProvider();
-  const report = buildUsageReport([provider]);
-  if (asJson) return emit({ ok: true, ...report });
-  console.log(`${bold('Usage')} ${dim(`${report.conversations} conversations`)}\n`);
+  const filter = {
+    project: flagValue('--project'),
+    since: flagValue('--since'),
+    until: flagValue('--until'),
+  };
+  const report = buildUsageReport([provider], filter);
+  if (asJson) return emit({ ok: true, filter, ...report });
+
+  const scope = [
+    filter.project && `project ${filter.project}`,
+    filter.since && `since ${filter.since}`,
+    filter.until && `until ${filter.until}`,
+  ].filter(Boolean).join(', ');
+  console.log(
+    `${bold('Usage')} ${dim(`${report.conversations} conversations${scope ? ` · ${scope}` : ''}`)}\n`,
+  );
   for (const m of report.models) {
     const cost = m.costUsd === null ? dim('unpriced') : `$${m.costUsd.toFixed(2)}`;
     console.log(`  ${m.model.padEnd(26)} ${String(m.turns).padStart(7)} turns  ${cost}`);
   }
   console.log(`\n  ${bold('API-equivalent'.padEnd(26))} ${String(report.totals.turns).padStart(7)} turns  ${bold(`$${report.totals.costUsd.toFixed(2)}`)}`);
   console.log(dim('\nWhat this work would have cost at published API rates.'));
+  console.log(dim('No per-account breakdown: transcripts never recorded the account, and pooling merged them.'));
 }
 
 // ---------------------------------------------------------------- backups
@@ -722,7 +796,8 @@ function cmdInit(): void {
 function cmdPreflight(): void {
   const report = preflight();
   if (asJson) return emit({ ok: true, report });
-  console.log(renderPreflight(report));
+  // renderPreflight returns lines so callers choose where they go.
+  console.log(renderPreflight(report).join('\n'));
 }
 
 // ---------------------------------------------------------------- pins
@@ -857,9 +932,11 @@ const HELP = `${bold('baton')} — switch AI coding accounts across editors, kee
   baton add <name>                create a new account directory to log into
   baton reauth <account>          the exact command to log that account in
   baton remove <account>          delete an account (history is kept by default)
+  baton rename <account> <new>    move its directory and re-point editors
   baton health                    per-account status and limits
   baton sessions                  sessions running right now
-  baton usage                     tokens and API-equivalent cost
+  baton usage [--project x]       tokens and API-equivalent cost
+                                  also --since / --until (ISO dates)
   baton use <account> [opts]      point an editor at an account
   baton link [account|--all]      share history across accounts (run once)
   baton unlink <account>          restore an account to standalone files
@@ -911,6 +988,7 @@ async function main(): Promise<void> {
     case 'accounts': cmdAccounts(); break;
     case 'reauth': cmdReauth(); break;
     case 'remove': cmdRemove(); break;
+    case 'rename': cmdRename(); break;
     case 'health': cmdHealth(); break;
     case 'sessions': cmdSessions(); break;
     case 'usage': cmdUsage(); break;

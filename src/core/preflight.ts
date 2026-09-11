@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { appHome, backupsPath, sharedStore, exists, isDir, isSymlink } from './paths.ts';
 import { PROVIDERS } from './registry.ts';
+import { loginCommandForDir } from './lifecycle.ts';
 import { findLiveSessions, type LiveSession } from './sessions.ts';
 import type { Account, Host, Provider } from './types.ts';
 
@@ -457,7 +458,7 @@ export function preflight(opts: PreflightOptions = {}): PreflightReport {
     ok: true,
   };
 
-  const problems = findProblems(report);
+  const problems = findProblems(report, providers);
   report.blockers = problems.filter((p) => p.level === 'blocker');
   report.warnings = problems.filter((p) => p.level === 'warning');
   report.ok = report.blockers.length === 0;
@@ -471,7 +472,7 @@ export function preflight(opts: PreflightOptions = {}): PreflightReport {
  * half-configured machine is still a usable one and refusing to continue is how
  * setup used to dead-end.
  */
-function findProblems(report: PreflightReport): PreflightProblem[] {
+function findProblems(report: PreflightReport, providers: Provider[]): PreflightProblem[] {
   const out: PreflightProblem[] = [];
 
   if (!report.node.ok) {
@@ -541,7 +542,10 @@ function findProblems(report: PreflightReport): PreflightProblem[] {
         message: `${a.id}: the directory exists but nothing has logged into it.`,
         action:
           'Log in, or the account is a dead end that editors can be pointed at but cannot use.',
-        command: `${p.envVar}="${a.configDir}" ${p.cliPath ? path.basename(p.cliPath) : p.id}`,
+        command: loginCommandForDir(
+          providers.find((x) => x.id === p.id) ?? PROVIDERS[0]!,
+          a.configDir,
+        ),
         providerId: p.id,
         accountId: a.id,
       });

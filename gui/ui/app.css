@@ -110,7 +110,7 @@ select, input[type=text], input[type=number], input[type=search] {
   font:inherit; padding:5px 8px; border-radius:7px; border:1px solid var(--line);
   background:var(--bg); color:var(--fg); max-width:170px;
 }
-input.wide { max-width:none; width:100%; }
+.wide { max-width:none; width:100%; }
 input[type=number] { max-width:92px; text-align:right; font-variant-numeric:tabular-nums; }
 button.btn { font:inherit; font-weight:600; font-size:12px; padding:7px 12px; border-radius:7px;
              border:0; background:var(--accent); color:var(--accent-fg); cursor:pointer;

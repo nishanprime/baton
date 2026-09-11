@@ -217,6 +217,21 @@ The one local signal is the provider saying in a transcript that the limit is al
 
 Older history has the same gap: transcripts never recorded the account, and pooling merged them, so conversations from before Baton cannot be attributed. `baton sessions` writes down what the process table shows while a session is alive, which makes attribution possible from the first observation onward — never retroactively.
 
+## When an account runs out
+
+```bash
+baton autoswitch                                  # check once and act
+baton settings set autoSwitch.enabled true
+baton settings set autoSwitch.mode switch         # or: notify
+baton settings set autoSwitch.rotation work,spare # order to try; empty = discovery order
+```
+
+`autoswitch` looks for the provider's own "you've hit your session limit" message in the pooled history and acts on it once — the event it handled is recorded, so polling it every minute does not switch every minute. In `notify` mode (the default) it tells you and changes nothing; in `switch` mode it re-points every bound editor at the next account in the rotation. You still have to reload the window.
+
+Either way it raises a desktop notification, because the person who needs to know is looking at an editor, not at Baton. Notifications are best effort — no notification daemon, a headless session, or permission denied never turns a successful switch into an error.
+
+The limit event names the project and the error but not the account, so it is credited to whichever account is bound when it is read.
+
 ## The app
 
 A Tauri menu bar app wraps the same CLI: switch accounts from the tray, or open a window to manage accounts, editors, history, usage, backups and settings.

@@ -256,7 +256,7 @@ baton() {
     return \$?
   fi
   case "\$1" in
-    use|env) ;;
+    env) ;;
     *) command baton "\$@"; return \$? ;;
   esac
   # Help is documentation, not a switch: it must reach the binary as typed.
@@ -295,7 +295,7 @@ function zshCompletion(): string {
   elif [[ "\$words[2]" == (${ACCOUNT_COMMANDS.join('|')}) ]]; then
     # Silent and optional: an older binary without this subcommand simply
     # offers no account names rather than printing an error mid-completion.
-    compadd -- \${(f)"\$(command baton accounts --ids 2>/dev/null)"}
+    compadd -- \${(f)"\$(command baton accounts --ids 2>/dev/null 2>/dev/null)"}
   fi
 }
 if (( \${+functions[compdef]} )); then
@@ -315,7 +315,7 @@ function bashCompletion(): string {
     ${ACCOUNT_COMMANDS.join('|')})
       # Silent and optional: an older binary without this subcommand simply
       # offers no account names rather than printing an error mid-completion.
-      COMPREPLY=( \$(compgen -W "\$(command baton accounts --ids 2>/dev/null)" -- "\$__baton_cur") ) ;;
+      COMPREPLY=( \$(compgen -W "\$(command baton accounts --ids 2>/dev/null 2>/dev/null)" -- "\$__baton_cur") ) ;;
     *) COMPREPLY=() ;;
   esac
 }
@@ -329,16 +329,17 @@ function fishInit(): string {
   return `# baton shell integration (fish).
 # Add to ~/.config/fish/config.fish with:  baton init fish | source
 
-# A child process cannot change this shell's environment, so the two
-# subcommands that need to are run here and sourced, and everything else is
-# handed to the real binary untouched — same output, same exit code.
-function baton --description 'baton, with use and env applied to this shell'
+# A child process cannot change this shell's environment, so env is run here
+# and sourced; everything else is handed to the real binary untouched — same
+# output, same exit code. use is deliberately NOT intercepted: it rebinds
+# editors rather than this shell, and evaluating its output would be wrong.
+function baton --description 'baton, with env applied to this shell'
     if test (count \$argv) -eq 0
         command baton
         return \$status
     end
     switch \$argv[1]
-        case use env
+        case env
             # Help is documentation, not a switch: it must reach the binary as typed.
             if contains -- -h \$argv; or contains -- --help \$argv
                 command baton \$argv
@@ -379,7 +380,7 @@ complete -c baton -f
 complete -c baton -n __fish_use_subcommand -a '${COMMANDS.join(' ')}'
 # Silent and optional: an older binary without this subcommand simply offers
 # no account names rather than printing an error mid-completion.
-complete -c baton -n '__fish_seen_subcommand_from ${ACCOUNT_COMMANDS.join(' ')}' -a '(command baton accounts --ids 2>/dev/null)'
+complete -c baton -n '__fish_seen_subcommand_from ${ACCOUNT_COMMANDS.join(' ')}' -a '(command baton accounts --ids 2>/dev/null 2>/dev/null)'
 `;
 }
 
