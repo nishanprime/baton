@@ -264,8 +264,9 @@ async function busyWhile(btn, fn) {
   if (btn?.disabled) return undefined;
   const label = btn ? btn.innerHTML : null;
   if (btn) {
+    const word = btn.classList.contains('icon') ? '' : btn.textContent.trim();
     btn.disabled = true;
-    btn.innerHTML = `<span class="spin"></span>${btn.textContent.trim() ? esc(btn.textContent.trim()) : ''}`;
+    btn.innerHTML = `<span class="spin"></span>${esc(word)}`;
   }
   try {
     return await fn();
@@ -544,7 +545,6 @@ const state = {
   backups: null,
   hist: null,
   histRows: [],
-  histOffset: 0,
   histPaging: true,
   filters: { search: '', project: '', from: '' },
   loading: {},
@@ -634,7 +634,6 @@ async function loadHistory(offset) {
   // Appending that page would duplicate rows, so paging is switched off instead.
   state.histPaging = served === offset;
   state.hist = page;
-  state.histOffset = served;
   const rows = page.conversations ?? [];
   state.histRows = offset === 0 || !state.histPaging ? rows : state.histRows.concat(rows);
 }

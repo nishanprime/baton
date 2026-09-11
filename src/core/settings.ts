@@ -33,6 +33,12 @@ export interface Settings {
   backups: {
     /** Newest snapshots always kept, whatever the size or age budget says. */
     keepCount: number;
+    /**
+     * Hard ceiling on how many are retained. Without this, small recent
+     * snapshots accumulate forever: keepCount is a floor, and the size and age
+     * budgets never bite on a tree of small, fresh entries.
+     */
+    maxCount: number;
     /** Total budget in megabytes; oldest go first once it is exceeded. */
     maxTotalMb: number;
     /** Snapshots older than this are dropped, subject to keepCount. */
@@ -48,7 +54,7 @@ export const DEFAULTS: Settings = {
   autoSwitch: { enabled: false, mode: 'notify', rotation: [], pollSeconds: 60 },
   defaultAccountByHost: {},
   display: { aliases: {}, hideEmails: false, hideProjects: false },
-  backups: { keepCount: 10, maxTotalMb: 500, maxAgeDays: 14 },
+  backups: { keepCount: 10, maxCount: 20, maxTotalMb: 500, maxAgeDays: 14 },
   pins: {},
   showReloadHint: true,
 };
@@ -63,6 +69,7 @@ export const SCHEMA: Record<string, { type: 'boolean' | 'number' | 'string' | 'l
   'display.hideEmails': { type: 'boolean', help: 'mask account emails in output' },
   'display.hideProjects': { type: 'boolean', help: 'replace project names with Project A, B, …' },
   'backups.keepCount': { type: 'number', help: 'newest snapshots always kept' },
+  'backups.maxCount': { type: 'number', help: 'hard ceiling on snapshots retained' },
   'backups.maxTotalMb': { type: 'number', help: 'total backup budget in MB' },
   'backups.maxAgeDays': { type: 'number', help: 'drop snapshots older than this' },
 };

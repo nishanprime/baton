@@ -86,7 +86,14 @@ export interface BackupPolicy {
   maxCount?: number;
 }
 
-export const DEFAULT_POLICY: BackupPolicy = { keepCount: 10, maxTotalMb: 500, maxAgeDays: 14 };
+export const DEFAULT_POLICY: BackupPolicy = {
+  keepCount: 10,
+  // A ceiling as well as a floor. Without it, small recent snapshots satisfy
+  // both the size and the age budget forever and the count grows unbounded.
+  maxCount: 20,
+  maxTotalMb: 500,
+  maxAgeDays: 14,
+};
 
 export type PruneReason = 'age' | 'size' | 'count';
 
@@ -218,8 +225,9 @@ export function resolvePolicy(partial?: Partial<BackupPolicy>): BackupPolicy {
     maxTotalMb: num(partial?.maxTotalMb, DEFAULT_POLICY.maxTotalMb),
     maxAgeDays: num(partial?.maxAgeDays, DEFAULT_POLICY.maxAgeDays),
   };
-  if (partial?.maxCount !== undefined) {
-    p.maxCount = Math.max(1, Math.floor(num(partial.maxCount, 1)));
+  const wanted = partial?.maxCount ?? DEFAULT_POLICY.maxCount;
+  if (wanted !== undefined) {
+    p.maxCount = Math.max(1, Math.floor(num(wanted, DEFAULT_POLICY.maxCount ?? 20)));
   }
   return p;
 }

@@ -450,3 +450,52 @@ test('an operation that throws keeps the backups it already took', () => {
   assert.equal(snaps[0]!.degraded, false, 'the manifest was still written');
   assert.equal(snaps[0]!.entries.length, 1);
 });
+
+test('maxCount bounds the tree that size and age never touch', () => {
+  // The failure this covers: keepCount is a floor, so a tree of small, recent
+  // snapshots satisfies both the size and the age budget forever and grows
+  // without limit. Only a ceiling stops it.
+  const base = Date.parse('2026-01-01T00:00:00.000Z');
+  for (let i = 0; i < 30; i++) {
+    const snap = beginSnapshot('switch', { now: base + i * 1000 });
+    snap.add(file(`f${i}.txt`, 'x'), 'tag');
+    snap.finish();
+  }
+  assert.equal(listSnapshots().length, 30);
+
+  const result = pruneSnapshots(
+    { keepCount: 10, maxCount: 20, maxTotalMb: 500, maxAgeDays: 365 },
+    { now: base + 60_000 },
+  );
+  assert.equal(listSnapshots().length, 20, 'trimmed to the ceiling');
+  assert.ok(
+    result.deleted.every((d) => d.reason === 'count'),
+    'deleted for count, since neither size nor age applied',
+  );
+});
+
+test('maxCount never digs below keepCount', () => {
+  const base = Date.parse('2026-01-01T00:00:00.000Z');
+  for (let i = 0; i < 5; i++) {
+    const snap = beginSnapshot('switch', { now: base + i * 1000 });
+    snap.add(file(`g${i}.txt`, 'x'), 'tag');
+    snap.finish();
+  }
+  pruneSnapshots(
+    { keepCount: 4, maxCount: 1, maxTotalMb: 0.000001, maxAgeDays: 0 },
+    { now: base + 60_000 },
+  );
+  assert.equal(listSnapshots().length, 4, 'keepCount wins every other limit');
+});
+
+test('the newest snapshot survives with every limit set to nothing', () => {
+  const base = Date.parse('2026-01-01T00:00:00.000Z');
+  const snap = beginSnapshot('switch', { now: base });
+  snap.add(file('h.txt', 'x'), 'tag');
+  snap.finish();
+  pruneSnapshots(
+    { keepCount: 0, maxCount: 0, maxTotalMb: 0.000001, maxAgeDays: 0 },
+    { now: base + 60_000 },
+  );
+  assert.equal(listSnapshots().length, 1, 'never leave the user with nothing to restore');
+});

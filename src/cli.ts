@@ -682,6 +682,7 @@ function cmdBackups(): void {
         keepCount: flagValue('--keep') ? Number(flagValue('--keep')) : policy.keepCount,
         maxTotalMb: flagValue('--max-size') ? Number(flagValue('--max-size')) : policy.maxTotalMb,
         maxAgeDays: flagValue('--max-age') ? Number(flagValue('--max-age')) : policy.maxAgeDays,
+        maxCount: flagValue('--max-count') ? Number(flagValue('--max-count')) : policy.maxCount,
       },
       { dryRun },
     );
@@ -720,7 +721,10 @@ function cmdBackups(): void {
   }
   if (!snapshots.length) console.log(dim('  none yet'));
   console.log(
-    `\n${dim(`Keeping the newest ${policy.keepCount}, up to ${policy.maxTotalMb}MB, for ${policy.maxAgeDays} days.`)}`,
+    `\n${dim(
+      `Keeping the newest ${policy.keepCount}, at most ${policy.maxCount ?? '∞'} total, ` +
+        `up to ${policy.maxTotalMb}MB, for ${policy.maxAgeDays} days. Older ones go automatically.`,
+    )}`,
   );
   if (stats.overBudget) {
     console.log(yellow(`Over budget — ${stats.wouldPrune} snapshot(s) would be pruned. Run: baton backups prune`));
