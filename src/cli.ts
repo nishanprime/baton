@@ -172,9 +172,8 @@ function cmdUse(): void {
     throw new Error(`No matching editor. Known: ${hosts.map((h) => h.id).join(', ')}`);
   }
 
-  const { result: results } = withSnapshot(`switch:${to.id}`, () =>
-    targets.map((host) => switchHost(provider, host, to, accounts, { dryRun })),
-  );
+  const plan = () => targets.map((host) => switchHost(provider, host, to, accounts, { dryRun }));
+  const results = dryRun ? plan() : withSnapshot(`switch:${to.id}`, plan).result;
   if (!dryRun) applyRetention(policyFromSettings());
 
   if (asJson) {
@@ -213,13 +212,14 @@ function cmdLink(): void {
   const targets = flags.has('--all') || !key ? accounts : [findAccount(accounts, key)];
 
   const storeState = new Map<string, string>();
-  const { result: report } = withSnapshot('link', () =>
+  const plan = () =>
     targets.map((a) => ({
       account: a.id,
       configDir: a.configDir,
       actions: linkAccount(provider, a, { dryRun, storeState }).filter((x) => x.action !== 'skipped'),
-    })),
-  );
+    }));
+
+  const report = dryRun ? plan() : withSnapshot('link', plan).result;
   if (!dryRun) applyRetention(policyFromSettings());
 
   if (asJson) {

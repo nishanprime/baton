@@ -4,6 +4,7 @@ import path from 'node:path';
 import readline from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
 import { linkAccount } from './share.ts';
+import { withSnapshot, pruneSnapshots, policyFromSettings } from './backups.ts';
 import { switchHost } from './switch.ts';
 import { sharedStore, appHome, exists } from './paths.ts';
 import { preflight, renderPreflight, type PreflightReport, type ProviderReport } from './preflight.ts';
@@ -242,8 +243,13 @@ async function poolHistoryStep(
   }
 
   if (await p.confirm('\nGo ahead?')) {
-    const real = new Map<string, string>();
-    for (const a of accounts) linkAccount(provider, a, { storeState: real });
+    // One snapshot for the whole pooling, as cmdLink does. First run is when
+    // the copies are largest, so scattering them here is the worst place to.
+    withSnapshot('setup:link', () => {
+      const real = new Map<string, string>();
+      for (const a of accounts) linkAccount(provider, a, { storeState: real });
+    });
+    pruneSnapshots(policyFromSettings());
     p.say(green('\n✓ History pooled. Every account now shares it.'));
   } else {
     p.say(dim('Skipped. Your accounts stay independent — `baton link --all` does this later.'));

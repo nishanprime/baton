@@ -216,11 +216,22 @@ fn add_account(app: AppHandle, name: String) -> Result<Value, String> {
 }
 
 #[tauri::command]
-fn history(app: AppHandle, search: Option<String>, project: Option<String>, from: Option<String>) -> Result<Value, String> {
+fn history(
+    app: AppHandle,
+    search: Option<String>,
+    project: Option<String>,
+    from: Option<String>,
+    limit: Option<u32>,
+    offset: Option<u32>,
+) -> Result<Value, String> {
     let mut args: Vec<String> = vec!["history".into()];
     if let Some(v) = search.filter(|v| !v.is_empty()) { args.push("--search".into()); args.push(v); }
     if let Some(v) = project.filter(|v| !v.is_empty()) { args.push("--project".into()); args.push(v); }
     if let Some(v) = from.filter(|v| !v.is_empty()) { args.push("--from".into()); args.push(v); }
+    // Dropping these pinned every request to the CLI's own first page, so
+    // "Load more" re-fetched the same rows and the view turned paging off.
+    if let Some(v) = limit { args.push("--limit".into()); args.push(v.to_string()); }
+    if let Some(v) = offset { args.push("--offset".into()); args.push(v.to_string()); }
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
     run_cli(&app, &refs)
 }

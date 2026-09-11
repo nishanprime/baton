@@ -136,6 +136,7 @@ const CLI_FOR = {
   add_account: 'add <name>',
   doctor: 'doctor',
   autoswitch: 'autoswitch',
+  preflight: 'preflight',
   preview_link: 'link --all --dry-run',
   apply_link: 'link --all',
 };
@@ -547,6 +548,7 @@ const state = {
   accounts: null,
   health: null,
   healthNote: null,
+  pooling: null,
   usage: null,
   backups: null,
   hist: null,
@@ -577,6 +579,15 @@ const load = {
     } catch (e) {
       state.health = null;
       state.healthNote = explain(e);
+    }
+    // Whether history is pooled is only reported by preflight; status has no
+    // such field. Unknown stays null, so the checklist says nothing rather
+    // than asserting a state nobody measured.
+    try {
+      const pf = await call('preflight');
+      state.pooling = pf.report?.providers?.[0]?.history?.state ?? null;
+    } catch {
+      state.pooling = null;
     }
   },
   usage: async () => { state.usage = await call('usage'); },
@@ -689,7 +700,7 @@ async function renameFlow(a) {
     { placeholder: a.accountId, value: current, okLabel: 'Save', allowEmpty: true },
   );
   if (name === null) return;
-  await call('set_alias', { account: a.accountId, name });
+  await call('set_alias', { account: a.accountId, alias: name });
   say(name ? `${a.accountId} now shows as "${name}".` : `${a.accountId} shows under its own id again.`);
   await reload(['status', 'accounts']);
 }
@@ -1030,7 +1041,7 @@ function firstRunSteps() {
   const provider = state.status?.providers?.[0];
   const hosts = provider?.hosts ?? [];
   const loggedIn = list.filter((a) => a.state !== 'draft');
-  const pooled = list.filter((a) => (a.boundHosts ?? []).length || a.state !== 'draft');
+  const poolable = list.filter((a) => (a.boundHosts ?? []).length || a.state !== 'draft');
 
   const steps = [];
   if (loggedIn.length < 2) {
@@ -1047,7 +1058,7 @@ function firstRunSteps() {
       detail: 'An account with no login is a dead end — an editor can point at it but cannot use it. Each card shows its own command.',
     });
   }
-  if (!state.status?.pooled && pooled.length) {
+  if (state.pooling && state.pooling !== 'pooled' && poolable.length) {
     steps.push({
       done: false,
       title: 'Pool your history',
