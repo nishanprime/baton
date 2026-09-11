@@ -55,7 +55,7 @@ npm link      # then just `baton setup`
 ## Everyday use
 
 ```bash
-baton status                   # accounts, editors, and what points where
+baton status                   # accounts, editors, this terminal, what is running
 baton accounts                 # each account's state and its next action
 baton use work --host cursor # point one editor at an account
 baton use work --all         # every editor at once
@@ -97,7 +97,7 @@ baton init zsh >> ~/.zshrc          # bash: ~/.bash_profile on macOS, ~/.bashrc 
 baton init fish >> ~/.config/fish/config.fish
 ```
 
-With it loaded, `baton env work` applies to the current shell rather than printing to it, and you get completions and a `baton_prompt` helper that prints the active account:
+With it loaded, `baton env work` applies to the current shell instead of printing to it, and you get account-name completions and a `baton_prompt` helper. Only `env` is intercepted: `use` rebinds editors rather than this shell, so it is passed through to the real binary untouched.
 
 ```bash
 PROMPT='$(baton_prompt) '"$PROMPT"     # zsh, with setopt PROMPT_SUBST → [work] ~/code %
@@ -130,11 +130,14 @@ An account is a config directory plus whatever identity has been logged into it.
 | `spent` | Logged in, and out of quota for now. |
 
 ```bash
-baton add work            # create the directory to log into
-baton reauth work         # the exact command to log this account in
-baton alias work "Work"   # cosmetic display name, for screenshots
-baton remove work         # delete the account; history is kept
+baton add work                # create the directory to log into
+baton reauth work             # the exact command to log this account in
+baton alias work "Work"       # cosmetic display name, for screenshots
+baton rename work clientco    # move the config directory itself
+baton remove work             # delete the account; history is kept
 ```
+
+`alias` and `rename` are different operations, and the cheap one is usually the one you want. An alias changes what Baton prints and touches no path at all. A rename moves the directory on disk: run it once to see the plan — what points at the old path, which editors and settings keys name it, what is running — and again with `--confirm` to apply. The shared-history symlinks survive the move because Baton writes them absolute; the references held elsewhere do not, so the plan lists them and tells you the `baton use` line that re-points each editor.
 
 **Every account has its own login command**, because it names that account's directory:
 
@@ -185,6 +188,7 @@ Snapshots taken before manifests existed still list, with their entries rebuilt 
 
 ```bash
 baton usage
+baton usage --project code --since 2026-08-01 --until 2026-09-01
 ```
 
 Reads every transcript in the pooled store and totals input, output, cache-write and cache-read tokens per model, then prices them at **published first-party API rates** — what this work *would have cost* on the API instead of a subscription. It is an API-equivalent figure, not a bill and not what you paid.
@@ -192,7 +196,7 @@ Reads every transcript in the pooled store and totals input, output, cache-write
 - Rates live in [`src/providers/claude/pricing.ts`](src/providers/claude/pricing.ts), as published 2026-06, in USD per million tokens. Cache writes bill at 1.25x input and cache reads at 0.1x, except where a model publishes its own cache-read rate. Edit that file to refresh them.
 - Partner platforms (Bedrock, Vertex) price differently and are not modelled.
 - A model with no known rate still has its tokens counted and is shown as `unpriced` rather than silently priced as zero.
-- Totals cover the whole pooled store — **all accounts together**. Per-account attribution of existing history is not possible; see the note under Health.
+- `--project` (as the history listing spells it), `--since` and `--until` narrow the window. There is no `--account`: totals always cover **all accounts together**, because a transcript never recorded which account wrote it and pooling merged them. See the note under Health.
 
 Results are cached by file mtime and size, so a second run only re-reads what changed.
 
@@ -254,7 +258,7 @@ The default is for people who already have Node, which is most people running an
 
 > On macOS a GUI app launched from Finder gets a minimal `PATH` and cannot see Homebrew or nvm installs. The default build asks your login shell where Node is. If that ever fails, set `BATON_NODE` to the absolute path.
 
-The app shells out to the CLI for everything and holds no logic of its own, so the two never disagree about what an account is. It is also the younger half of the project: the CLI is the complete surface, and anything the window has not caught up to yet is a command away. [BACKLOG.md](BACKLOG.md) tracks the gap.
+The app shells out to the CLI for everything and holds no logic of its own, so the two never disagree about what an account is, and every destructive action shows you the CLI's own dry run before it happens. The CLI is still the complete surface: first-run setup, pins, `rename`, `exec` and `uninstall` have no window yet. [BACKLOG.md](BACKLOG.md) tracks the gap.
 
 ## Undoing it
 

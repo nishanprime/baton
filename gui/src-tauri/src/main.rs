@@ -551,6 +551,23 @@ fn refresh_tray(app: &AppHandle) {
     });
 }
 
+// Aliases matching the CLI's own spelling, which is what the frontend uses.
+// Keeping both means neither side has to churn when the other is edited.
+#[tauri::command]
+fn usage(app: AppHandle) -> Result<Value, String> {
+    usage_report(app)
+}
+
+#[tauri::command]
+fn backups(app: AppHandle) -> Result<Value, String> {
+    backups_list(app)
+}
+
+#[tauri::command]
+fn reveal_path(path: String) -> Result<(), String> {
+    open_in_finder(path)
+}
+
 fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
@@ -577,6 +594,9 @@ fn main() {
             autoswitch,
             open_login_terminal,
             open_terminal_on_account,
+            usage,
+            backups,
+            reveal_path,
             open_in_finder
         ])
         .setup(|app| {
