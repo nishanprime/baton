@@ -19,6 +19,12 @@ export interface UsageReport {
   lastAt: string | null;
   /** Files re-parsed this call; the rest came from cache. */
   reparsed: number;
+  /**
+   * Messages Claude Code wrote locally rather than getting from the API —
+   * connection errors, quota notices, "No response requested." They are not a
+   * model and cost nothing, so they are counted rather than billed.
+   */
+  syntheticMessages: number;
 }
 
 interface CacheEntry {
@@ -33,9 +39,11 @@ interface CacheEntry {
    * Stored so a --project filter here matches what the user saw there.
    */
   project: string | null;
+  /** Locally generated messages — errors and notices — that cost nothing. */
+  synthetic: number;
 }
 
-const CACHE_VERSION = 2;
+const CACHE_VERSION = 3;
 const cacheFile = () => path.join(appHome(), 'cache', 'usage-index.json');
 
 function loadCache(): Record<string, CacheEntry> {
@@ -84,6 +92,7 @@ function scanFile(file: string): CacheEntry | null {
   let firstAt: string | null = null;
   let lastAt: string | null = null;
   let cwd: string | null = null;
+  let synthetic = 0;
 
   for (const line of text.split('\n')) {
     if (!line) continue;
@@ -116,6 +125,16 @@ function scanFile(file: string): CacheEntry | null {
     if (!usage) continue;
 
     const model = (msg?.model as string | undefined) ?? 'unknown';
+
+    // "<synthetic>" is not a model. Claude Code writes it on messages it
+    // produced locally without an API call — "No response requested.",
+    // connection errors, quota notices — so every one carries zero tokens.
+    // Listed as a model it read as "unpriced", which says Baton failed to
+    // price something real when nothing was ever billed.
+    if (model.startsWith('<')) {
+      synthetic++;
+      continue;
+    }
     const acc = (perModel[model] ??= empty());
     acc.turns++;
     acc.input += Number(usage.input_tokens ?? 0);
@@ -126,8 +145,8 @@ function scanFile(file: string): CacheEntry | null {
 
   const project = cwd ? path.basename(cwd) : null;
   return Object.keys(perModel).length
-    ? { mtimeMs: 0, size: 0, perModel, firstAt, lastAt, project }
-    : { mtimeMs: 0, size: 0, perModel: {}, firstAt, lastAt, project };
+    ? { mtimeMs: 0, size: 0, perModel, firstAt, lastAt, project, synthetic }
+    : { mtimeMs: 0, size: 0, perModel: {}, firstAt, lastAt, project, synthetic };
 }
 
 export interface UsageFilter {
@@ -159,6 +178,7 @@ export function buildUsageReport(providers: Provider[], filter: UsageFilter = {}
   const totalsByModel: Record<string, TokenCounts & { turns: number }> = {};
   let conversations = 0;
   let reparsed = 0;
+  let syntheticMessages = 0;
   let firstAt: string | null = null;
   let lastAt: string | null = null;
 
@@ -208,6 +228,7 @@ export function buildUsageReport(providers: Provider[], filter: UsageFilter = {}
         if (filter.until && (!touched || touched > filter.until)) continue;
 
         conversations++;
+        syntheticMessages += entry.synthetic ?? 0;
         if (entry.firstAt && (!firstAt || entry.firstAt < firstAt)) firstAt = entry.firstAt;
         if (entry.lastAt && (!lastAt || entry.lastAt > lastAt)) lastAt = entry.lastAt;
 
@@ -241,5 +262,5 @@ export function buildUsageReport(providers: Provider[], filter: UsageFilter = {}
     { input: 0, output: 0, cacheWrite: 0, cacheRead: 0, turns: 0, costUsd: 0 },
   );
 
-  return { models, totals, conversations, firstAt, lastAt, reparsed };
+  return { models, totals, conversations, firstAt, lastAt, reparsed, syntheticMessages };
 }

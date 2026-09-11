@@ -114,3 +114,29 @@ test('an empty store reports zeroes rather than throwing', () => {
   assert.equal(r.conversations, 0);
   assert.equal(r.totals.costUsd, 0);
 });
+
+test('locally generated messages are excluded, not listed as an unpriced model', () => {
+  // Claude Code writes "<synthetic>" on messages it produced without an API
+  // call — connection errors, quota notices, "No response requested." They
+  // carry zero tokens, so as a model row they read "unpriced", which says
+  // Baton failed to price something real when nothing was ever billed.
+  transcript('s1', [
+    turn('claude-opus-5', { input_tokens: 100 }),
+    turn('<synthetic>', { input_tokens: 0, output_tokens: 0 }),
+    turn('<synthetic>', { input_tokens: 0, output_tokens: 0 }),
+  ]);
+  const r = buildUsageReport([claudeProvider]);
+  assert.deepEqual(r.models.map((m) => m.model), ['claude-opus-5']);
+  assert.equal(r.syntheticMessages, 2, 'counted rather than silently dropped');
+  assert.equal(r.totals.turns, 1, 'they are not turns anyone paid for');
+});
+
+test('a genuinely unknown model is still listed as unpriced', () => {
+  // The distinction that matters: an unrecognised real model must stay
+  // visible, because its tokens were billed and Baton simply lacks the rate.
+  transcript('s1', [turn('some-future-model', { input_tokens: 500 })]);
+  const r = buildUsageReport([claudeProvider]);
+  assert.equal(r.models[0]!.model, 'some-future-model');
+  assert.equal(r.models[0]!.costUsd, null);
+  assert.equal(r.syntheticMessages, 0);
+});

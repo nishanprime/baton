@@ -100,3 +100,11 @@ test('an empty store yields nothing rather than throwing', () => {
   fs.rmSync(path.join(root, 'shared'), { recursive: true, force: true });
   assert.deepEqual(findLimitEvents([claudeProvider], { sinceMinutes: 60 }), []);
 });
+
+test('an org running out of credit counts as exhaustion', () => {
+  // Found in real transcripts and previously missed. It stops work exactly as
+  // a personal limit does, and is the case where switching is most likely the
+  // answer.
+  transcript('s1', [limitLine(5, "You've hit your org's monthly spend limit · run /usage-credits to raise it")]);
+  assert.equal(findLimitEvents([claudeProvider], { sinceMinutes: 60 }).length, 1);
+});

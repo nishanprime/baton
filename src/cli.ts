@@ -718,6 +718,14 @@ function cmdUsage(): void {
   }
   console.log(`\n  ${bold('API-equivalent'.padEnd(26))} ${String(report.totals.turns).padStart(7)} turns  ${bold(`$${report.totals.costUsd.toFixed(2)}`)}`);
   console.log(dim('\nWhat this work would have cost at published API rates.'));
+  if (report.syntheticMessages) {
+    console.log(
+      dim(
+        `${report.syntheticMessages} local message(s) excluded — errors and notices Claude Code ` +
+          'wrote itself, with no API call behind them.',
+      ),
+    );
+  }
   console.log(dim('No per-account breakdown: transcripts never recorded the account, and pooling merged them.'));
 }
 

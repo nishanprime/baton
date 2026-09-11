@@ -28,6 +28,11 @@ const EXHAUSTION_PATTERNS = [
   /usage limit reached/i,
   /rate.?limit(ed)?\b/i,
   /out of (credits|quota)/i,
+  // Found in real transcripts and previously missed: an org running out of
+  // credit stops work exactly as a personal limit does, and is the case where
+  // switching accounts is most likely to be the answer.
+  /hit your org(anisation|anization)?'?s? (monthly )?spend limit/i,
+  /spend limit/i,
 ];
 
 const RESETS_RE = /resets?\s+(.+?)(?:$|\n)/i;

@@ -1497,7 +1497,11 @@ function viewUsage() {
       </div>
       ${tokenStats(u.totals ?? {})}
     </div>
-    <div class="hint">What this work would have cost at published API rates. A subscription is not billed
+    <div class="hint">What this work would have cost at published API rates.${
+        state.usage?.syntheticMessages
+          ? ` ${state.usage.syntheticMessages} local message${state.usage.syntheticMessages === 1 ? '' : 's'} excluded — errors and notices Claude Code wrote itself, with no API call behind them.`
+          : ''
+      } A subscription is not billed
       this way — the number is a comparison, not an invoice. Counted from
       ${plural(u.conversations ?? 0, 'conversation')} spanning ${esc(span)}.</div>
 
