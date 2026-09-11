@@ -96,7 +96,7 @@ function findLiveSessionsWindows(providers: Provider[], accounts: Account[]): Li
 }
 
 /** Which editor an extension-hosted binary belongs to, from its install path. */
-function editorFromPath(command: string): string | null {
+export function editorFromPath(command: string): string | null {
   const m = /[/\\]\.([a-z-]+)[/\\]extensions[/\\]/i.exec(command);
   if (m) return m[1]!.replace(/-ide$/, '');
   if (command.includes('/Applications/')) {
