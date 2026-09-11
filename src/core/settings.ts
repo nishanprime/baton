@@ -26,6 +26,18 @@ export interface Settings {
     hideEmails: boolean;
     hideProjects: boolean;
   };
+  /**
+   * Backup retention. Snapshots are taken before anything destructive, so
+   * without a budget they grow past the history they exist to protect.
+   */
+  backups: {
+    /** Newest snapshots always kept, whatever the size or age budget says. */
+    keepCount: number;
+    /** Total budget in megabytes; oldest go first once it is exceeded. */
+    maxTotalMb: number;
+    /** Snapshots older than this are dropped, subject to keepCount. */
+    maxAgeDays: number;
+  };
   /** Print the "reload the window" reminder after a switch. */
   showReloadHint: boolean;
 }
@@ -34,6 +46,7 @@ export const DEFAULTS: Settings = {
   autoSwitch: { enabled: false, mode: 'notify', rotation: [], pollSeconds: 60 },
   defaultAccountByHost: {},
   display: { aliases: {}, hideEmails: false, hideProjects: false },
+  backups: { keepCount: 10, maxTotalMb: 500, maxAgeDays: 14 },
   showReloadHint: true,
 };
 
@@ -46,6 +59,9 @@ export const SCHEMA: Record<string, { type: 'boolean' | 'number' | 'string' | 'l
   'showReloadHint': { type: 'boolean', help: 'show the reload reminder after switching' },
   'display.hideEmails': { type: 'boolean', help: 'mask account emails in output' },
   'display.hideProjects': { type: 'boolean', help: 'replace project names with Project A, B, …' },
+  'backups.keepCount': { type: 'number', help: 'newest snapshots always kept' },
+  'backups.maxTotalMb': { type: 'number', help: 'total backup budget in MB' },
+  'backups.maxAgeDays': { type: 'number', help: 'drop snapshots older than this' },
 };
 
 /** Set or clear a cosmetic display name for an account. */

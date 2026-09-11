@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { sharedStore, exists, isSymlink, backupsPath } from './paths.ts';
+import { sharedStore, exists, isSymlink } from './paths.ts';
+import { backupEntry } from './backups.ts';
 import { mergeFile } from './merge.ts';
 import type { Account, Provider } from './types.ts';
 
@@ -54,15 +55,6 @@ function describe(action: LinkAction['action'], dst: string): string {
     default:
       return `-> ${dst}`;
   }
-}
-
-/** Snapshot a path into the backups tree before it is moved or removed. */
-function backupEntry(src: string, tag: string): string {
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const dest = path.join(backupsPath(), stamp, tag, path.basename(src));
-  fs.mkdirSync(path.dirname(dest), { recursive: true });
-  fs.cpSync(src, dest, { recursive: true });
-  return dest;
 }
 
 /**

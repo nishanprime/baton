@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { spawnSync } from 'node:child_process';
 import { PROVIDERS, getProvider, defaultProvider } from './core/registry.ts';
 import { linkAccount, unlinkAccount } from './core/share.ts';
 import { switchHost } from './core/switch.ts';
@@ -6,7 +7,23 @@ import { appHome, sharedStore } from './core/paths.ts';
 import { runSetup, createAccount, loginHint } from './core/setup.ts';
 import { loadSettings, setSetting, setAlias, settingsPath, SCHEMA } from './core/settings.ts';
 import { accountLabel, accountEmail, makeProjectMasker, maskPath, maskPathsInText } from './core/display.ts';
-import { listConversations, historyFacets } from './core/history.ts';
+import { listConversations } from './core/history.ts';
+import {
+  listSnapshots, pruneSnapshots, restoreSnapshot, backupStats, policyFromSettings,
+  withSnapshot, pruneSnapshots as applyRetention,
+} from './core/backups.ts';
+import {
+  shellCommand, execCommand, envScript, initScript, detectShell, rcFile,
+  currentAccountFromEnv, PARENT_SHELL_NOTE, type InitShell,
+} from './core/terminal.ts';
+import { preflight, renderPreflight, formatBytes } from './core/preflight.ts';
+import {
+  classifyAccounts, reauthCommand, removeAccount, canRemoveAccount, renameAccount,
+} from './core/lifecycle.ts';
+import { accountHealth, UNAVAILABLE_FIELDS } from './core/health.ts';
+import { findLiveSessions } from './core/sessions.ts';
+import { buildUsageReport } from './core/usage.ts';
+import { recordObservation, attributionStats } from './core/attribution.ts';
 import { findLimitEvents } from './core/limits.ts';
 import { loadState, saveState } from './core/state.ts';
 import type { Account, Host, Provider } from './core/types.ts';
@@ -131,7 +148,10 @@ function cmdUse(): void {
     throw new Error(`No matching editor. Known: ${hosts.map((h) => h.id).join(', ')}`);
   }
 
-  const results = targets.map((host) => switchHost(provider, host, to, accounts, { dryRun }));
+  const { result: results } = withSnapshot(`switch:${to.id}`, () =>
+    targets.map((host) => switchHost(provider, host, to, accounts, { dryRun })),
+  );
+  if (!dryRun) applyRetention(policyFromSettings());
 
   if (asJson) {
     emit({
@@ -169,11 +189,14 @@ function cmdLink(): void {
   const targets = flags.has('--all') || !key ? accounts : [findAccount(accounts, key)];
 
   const storeState = new Map<string, string>();
-  const report = targets.map((a) => ({
-    account: a.id,
-    configDir: a.configDir,
-    actions: linkAccount(provider, a, { dryRun, storeState }).filter((x) => x.action !== 'skipped'),
-  }));
+  const { result: report } = withSnapshot('link', () =>
+    targets.map((a) => ({
+      account: a.id,
+      configDir: a.configDir,
+      actions: linkAccount(provider, a, { dryRun, storeState }).filter((x) => x.action !== 'skipped'),
+    })),
+  );
+  if (!dryRun) applyRetention(policyFromSettings());
 
   if (asJson) {
     emit({
@@ -423,6 +446,263 @@ function cmdAutoswitch(): void {
   }
 }
 
+// ---------------------------------------------------------------- accounts
+
+const STATE_LABEL: Record<string, string> = {
+  draft: 'draft — never logged in',
+  active: 'active',
+  idle: 'ready',
+  spent: 'limit reached',
+};
+
+function cmdAccounts(): void {
+  const provider = resolveProvider();
+  const accounts = provider.discoverAccounts();
+  const settings = loadSettings();
+  const statuses = classifyAccounts(provider, accounts);
+
+  if (asJson) {
+    return emit({
+      ok: true,
+      accounts: statuses.map((st) => {
+        const a = accounts.find((x) => x.id === st.accountId)!;
+        return {
+          ...st,
+          displayName: accountLabel(st.accountId, settings),
+          displayEmail: accountEmail(st.email, settings),
+          hasAlias: st.accountId in settings.display.aliases,
+          isDefault: a.isDefault,
+          reauth: reauthCommand(provider, a),
+          removable: canRemoveAccount(provider, a),
+        };
+      }),
+    });
+  }
+
+  console.log(`${bold('Accounts')}\n`);
+  for (const st of statuses) {
+    const tag = st.state === 'draft' ? yellow(STATE_LABEL[st.state]!) : dim(STATE_LABEL[st.state]!);
+    console.log(`  ${bold(accountLabel(st.accountId, settings).padEnd(16))} ${tag}`);
+    console.log(`    ${dim(st.reason)}`);
+    if (st.loginCommand) console.log(`    ${bold(st.loginCommand)}`);
+    else console.log(`    ${dim(st.nextAction)}`);
+  }
+}
+
+function cmdReauth(): void {
+  const provider = resolveProvider();
+  const key = positional[1];
+  if (!key) throw new Error('Usage: baton reauth <account>');
+  const account = findAccount(provider.discoverAccounts(), key);
+  const cmd = reauthCommand(provider, account);
+  if (asJson) return emit({ ok: true, account: account.id, ...cmd });
+  console.log(`${bold(cmd.command)}\n`);
+  console.log(dim(cmd.explanation));
+}
+
+function cmdRemove(): void {
+  const provider = resolveProvider();
+  const key = positional[1];
+  if (!key) throw new Error('Usage: baton remove <account> [--delete-history] [--force] [--dry-run]');
+  const accounts = provider.discoverAccounts();
+  const account = findAccount(accounts, key);
+  const history = flags.has('--delete-history') ? 'delete' as const : 'keep' as const;
+  const opts = { dryRun, force: flags.has('--force'), history };
+
+  const check = canRemoveAccount(provider, account, opts);
+  if (!check.ok && !opts.force) {
+    if (asJson) return emit({ ok: false, error: check.refusals.map((r) => r.message).join(' '), refusals: check.refusals });
+    for (const r of check.refusals) {
+      console.log(yellow(`✗ ${r.message}`));
+      if (r.overridable) console.log(dim('  Pass --force to override.'));
+    }
+    process.exit(1);
+  }
+
+  const result = removeAccount(provider, account, opts);
+  if (asJson) return emit({ ok: true, ...result });
+
+  console.log(`${dryRun ? yellow('[dry-run]') : green('✓')} ${dryRun ? 'would remove' : 'removed'} ${bold(account.id)}`);
+  console.log(dim(`  ${result.removed.length} path(s) removed, ${result.preserved.length} preserved`));
+  if (history === 'keep') console.log(dim('  Conversation history was left in the shared store, untouched.'));
+  if (result.backupPath) console.log(dim(`  snapshot: ${result.backupPath}`));
+  for (const h of result.rebind) {
+    console.log(yellow(`  ⚠ ${h.label} still points here — run: baton use <other> --host ${h.id}`));
+  }
+  for (const w of result.warnings) console.log(yellow(`  ⚠ ${w}`));
+}
+
+// ---------------------------------------------------------------- health
+
+function cmdHealth(): void {
+  const provider = resolveProvider();
+  const accounts = provider.discoverAccounts();
+  const health = accountHealth(provider, accounts);
+  if (asJson) return emit({ ok: true, accounts: health, unavailable: UNAVAILABLE_FIELDS });
+
+  console.log(`${bold('Health')}\n`);
+  for (const h of health) {
+    const mark = h.status === 'ok' ? green('●') : h.status === 'spent' ? yellow('●') : dim('○');
+    console.log(`  ${mark} ${bold(h.label.padEnd(16))} ${dim(h.reason)}`);
+    if (h.spent.known && h.spent.value.resets) {
+      console.log(`    ${yellow(`resets ${h.spent.value.resets}`)}`);
+    }
+    if (h.liveSessions.known && h.liveSessions.value.count) {
+      console.log(dim(`    ${h.liveSessions.value.count} live session(s)`));
+    }
+  }
+  console.log(`\n${dim('Not knowable locally:')}`);
+  for (const f of UNAVAILABLE_FIELDS) console.log(dim(`  ${f.label} — ${f.why}`));
+}
+
+function cmdSessions(): void {
+  const provider = resolveProvider();
+  const accounts = provider.discoverAccounts();
+  const sessions = findLiveSessions([provider], accounts);
+  recordObservation(provider, sessions);
+  if (asJson) return emit({ ok: true, sessions, attribution: attributionStats([provider]) });
+  console.log(`${bold('Live sessions')} ${dim(`${sessions.length}`)}\n`);
+  for (const s of sessions) {
+    console.log(`  pid ${String(s.pid).padEnd(8)} ${bold(s.accountId ?? 'unknown')}  ${dim(`${s.editorHint ?? '?'} · ${s.entrypoint ?? '?'}`)}`);
+  }
+  if (!sessions.length) console.log(dim('  none'));
+}
+
+function cmdUsage(): void {
+  const provider = resolveProvider();
+  const report = buildUsageReport([provider]);
+  if (asJson) return emit({ ok: true, ...report });
+  console.log(`${bold('Usage')} ${dim(`${report.conversations} conversations`)}\n`);
+  for (const m of report.models) {
+    const cost = m.costUsd === null ? dim('unpriced') : `$${m.costUsd.toFixed(2)}`;
+    console.log(`  ${m.model.padEnd(26)} ${String(m.turns).padStart(7)} turns  ${cost}`);
+  }
+  console.log(`\n  ${bold('API-equivalent'.padEnd(26))} ${String(report.totals.turns).padStart(7)} turns  ${bold(`$${report.totals.costUsd.toFixed(2)}`)}`);
+  console.log(dim('\nWhat this work would have cost at published API rates.'));
+}
+
+// ---------------------------------------------------------------- backups
+
+function cmdBackups(): void {
+  const sub = positional[1];
+  const policy = policyFromSettings();
+
+  if (sub === 'prune') {
+    const result = pruneSnapshots(
+      {
+        keepCount: flagValue('--keep') ? Number(flagValue('--keep')) : policy.keepCount,
+        maxTotalMb: flagValue('--max-size') ? Number(flagValue('--max-size')) : policy.maxTotalMb,
+        maxAgeDays: flagValue('--max-age') ? Number(flagValue('--max-age')) : policy.maxAgeDays,
+      },
+      { dryRun },
+    );
+    if (asJson) return emit({ ok: true, ...result });
+    const verb = dryRun ? 'would delete' : 'deleted';
+    console.log(`${green('✓')} ${verb} ${result.deleted.length} snapshot(s), freeing ${formatBytes(result.bytesFreed)}`);
+    for (const d of result.deleted) console.log(`  ${dim(d.id)}  ${dim(`(${d.reason})`)}`);
+    console.log(dim(`${formatBytes(result.bytesRemaining)} remaining`));
+    return;
+  }
+
+  if (sub === 'restore') {
+    const id = positional[2];
+    if (!id) throw new Error('Usage: baton backups restore <id> [--dry-run]');
+    const result = restoreSnapshot(id, { dryRun });
+    if (asJson) return emit({ ok: true, ...result });
+    console.log(`${dryRun ? yellow('[dry-run]') : green('✓')} restored ${result.restored} entr(ies) from ${bold(id)}`);
+    for (const e of result.entries) {
+      const mark = e.action === 'restored' ? green('✓') : yellow('·');
+      console.log(`  ${mark} ${e.tag.padEnd(24)} ${dim(e.reason ?? e.originalPath)}`);
+    }
+    if (!dryRun) console.log(dim('A pre-restore snapshot was taken first, so this is undoable.'));
+    return;
+  }
+
+  const snapshots = listSnapshots();
+  const stats = backupStats();
+  if (asJson) return emit({ ok: true, policy, stats, snapshots });
+
+  console.log(`${bold('Backups')} ${dim(`${stats.count} snapshots · ${formatBytes(stats.totalBytes)}`)}\n`);
+  for (const s of snapshots) {
+    const when = s.createdAt ? s.createdAt.slice(0, 16).replace('T', ' ') : dim('unknown');
+    const flag = s.degraded ? yellow(' (no manifest)') : '';
+    console.log(`  ${bold(s.id)}`);
+    console.log(`    ${dim(`${s.label} · ${when} · ${formatBytes(s.bytes)} · ${s.entries.length} entries`)}${flag}`);
+  }
+  if (!snapshots.length) console.log(dim('  none yet'));
+  console.log(
+    `\n${dim(`Keeping the newest ${policy.keepCount}, up to ${policy.maxTotalMb}MB, for ${policy.maxAgeDays} days.`)}`,
+  );
+  if (stats.overBudget) {
+    console.log(yellow(`Over budget — ${stats.wouldPrune} snapshot(s) would be pruned. Run: baton backups prune`));
+  }
+  console.log(dim('Restore with: baton backups restore <id>'));
+}
+
+// ---------------------------------------------------------------- terminal
+
+function cmdShell(): void {
+  const provider = resolveProvider();
+  const key = positional[1];
+  if (!key) throw new Error('Usage: baton shell <account>');
+  const account = findAccount(provider.discoverAccounts(), key);
+  const plan = shellCommand(provider, account);
+  if (asJson) return emit({ ok: true, account: account.id, ...plan });
+  console.log(dim(`starting a shell on ${account.id} — exit to return`));
+  spawnPlan(plan);
+}
+
+function cmdExec(): void {
+  const provider = resolveProvider();
+  const sep = argv.indexOf('--');
+  const key = positional[1];
+  if (!key || sep < 0) throw new Error('Usage: baton exec <account> -- <command...>');
+  const account = findAccount(provider.discoverAccounts(), key);
+  const plan = execCommand(provider, account, argv.slice(sep + 1));
+  if (asJson) return emit({ ok: true, account: account.id, ...plan });
+  spawnPlan(plan);
+}
+
+/** Run the planned command inline so its exit code becomes ours. */
+function spawnPlan(plan: { argv: string[]; env: Record<string, string> }): void {
+  const [bin, ...rest] = plan.argv;
+  if (!bin) throw new Error('nothing to run');
+  const r = spawnSync(bin, rest, { stdio: 'inherit', env: { ...process.env, ...plan.env } });
+  if (r.error) throw r.error;
+  process.exit(r.status ?? 0);
+}
+
+function cmdEnv(): void {
+  const provider = resolveProvider();
+  const key = positional[1];
+  if (!key) throw new Error('Usage: eval "$(baton env <account>)"');
+  const account = findAccount(provider.discoverAccounts(), key);
+  const shell = (flagValue('--shell') as InitShell | undefined) ?? detectShell();
+  const script = envScript(provider, account, shell === 'unknown' ? 'bash' : shell);
+  if (asJson) return emit({ ok: true, account: account.id, script });
+  console.log(script);
+}
+
+function cmdInit(): void {
+  const requested = (positional[1] as InitShell | undefined) ?? detectShell();
+  if (!requested || requested === 'unknown') {
+    throw new Error('Usage: baton init <zsh|bash|fish>');
+  }
+  const script = initScript(requested);
+  if (asJson) return emit({ ok: true, shell: requested, script, rcFile: rcFile(requested) });
+  console.log(script);
+  console.error(dim(`\n# Add to ${rcFile(requested)}:  baton init ${requested} >> ${rcFile(requested)}`));
+  console.error(dim(`# ${PARENT_SHELL_NOTE}`));
+}
+
+// ---------------------------------------------------------------- preflight
+
+function cmdPreflight(): void {
+  const report = preflight();
+  if (asJson) return emit({ ok: true, report });
+  console.log(renderPreflight(report));
+}
+
 // ---------------------------------------------------------------- doctor
 
 function cmdDoctor(): void {
@@ -441,8 +721,15 @@ function cmdDoctor(): void {
         issues.push({ level: 'warn', message: `${h.label} points at an unrecognised dir: ${h.configDir}` });
       }
     }
+    // A generic "run /login" is useless when several accounts need it: the
+    // command differs per account because it names that account's directory.
     for (const a of accounts.filter((x) => !x.email)) {
-      issues.push({ level: 'warn', message: `${a.id}: no account identity found — may need \`claude /login\`.` });
+      const { command } = reauthCommand(provider, a);
+      issues.push({
+        level: 'warn',
+        message: `${a.id} has never been logged in.`,
+        fix: command,
+      });
     }
   }
   // ok reports whether the check ran; healthy reports what it found. Collapsing
@@ -461,7 +748,13 @@ const HELP = `${bold('baton')} — switch AI coding accounts across editors, kee
 
   baton setup                     guided first-time walkthrough
   baton status                    show accounts, editors, and what points where
+  baton accounts                  accounts with their state and next action
   baton add <name>                create a new account directory to log into
+  baton reauth <account>          the exact command to log that account in
+  baton remove <account>          delete an account (history is kept by default)
+  baton health                    per-account status and limits
+  baton sessions                  sessions running right now
+  baton usage                     tokens and API-equivalent cost
   baton use <account> [opts]      point an editor at an account
   baton link [account|--all]      share history across accounts (run once)
   baton unlink <account>          restore an account to standalone files
@@ -470,6 +763,18 @@ const HELP = `${bold('baton')} — switch AI coding accounts across editors, kee
   baton history [--offset n]      browse pooled conversations (50 per page)
   baton autoswitch                check for a spent account and act on it
   baton doctor                    find half-applied or inconsistent bindings
+  baton preflight                 what is installed, found, and running
+
+Terminal
+  baton shell <account>           start a shell bound to an account
+  baton exec <account> -- <cmd>   run one command under an account
+  baton env <account>             printable exports: eval "$(baton env work)"
+  baton init <zsh|bash|fish>      shell integration for the current shell
+
+Backups
+  baton backups                   list snapshots and the retention policy
+  baton backups prune             apply retention now
+  baton backups restore <id>      restore a snapshot (itself undoable)
 
 Options
   --host <id>      only this editor (default: every editor already bound)
@@ -489,6 +794,18 @@ async function main(): Promise<void> {
     case 'unlink': cmdUnlink(); break;
     case 'settings': case 'config': cmdSettings(); break;
     case 'history': cmdHistory(); break;
+    case 'backups': cmdBackups(); break;
+    case 'shell': cmdShell(); break;
+    case 'exec': cmdExec(); break;
+    case 'env': cmdEnv(); break;
+    case 'init': cmdInit(); break;
+    case 'preflight': cmdPreflight(); break;
+    case 'accounts': cmdAccounts(); break;
+    case 'reauth': cmdReauth(); break;
+    case 'remove': cmdRemove(); break;
+    case 'health': cmdHealth(); break;
+    case 'sessions': cmdSessions(); break;
+    case 'usage': cmdUsage(); break;
     case 'autoswitch': cmdAutoswitch(); break;
     case 'alias': cmdAlias(); break;
     case 'doctor': cmdDoctor(); break;

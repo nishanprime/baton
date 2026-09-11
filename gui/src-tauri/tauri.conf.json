@@ -5,8 +5,8 @@
   "identifier": "dev.nishanprime.baton",
   "build": {
     "frontendDist": "../ui",
-    "beforeBuildCommand": "cd ../.. && pnpm build:cli",
-    "beforeDevCommand": "cd ../.. && pnpm build:cli"
+    "beforeBuildCommand": "cd .. && pnpm build:cli",
+    "beforeDevCommand": "cd .. && pnpm build:cli"
   },
   "app": {
     "windows": [

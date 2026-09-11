@@ -38,6 +38,17 @@ fn newest_versioned_node(root: PathBuf, suffix: &str) -> Option<PathBuf> {
 /// the known install locations directly first, and only then fall back to an
 /// interactive login shell.
 fn resolve_node() -> Result<String, String> {
+    // A standalone build ships its own Node beside the executable. Prefer it:
+    // it is known-good, and it is the whole reason that build exists.
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let sidecar = dir.join("node");
+            if sidecar.is_file() {
+                return Ok(sidecar.to_string_lossy().into_owned());
+            }
+        }
+    }
+
     if let Ok(explicit) = std::env::var("BATON_NODE") {
         if PathBuf::from(&explicit).is_file() {
             return Ok(explicit);

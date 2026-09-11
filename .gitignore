@@ -5,3 +5,4 @@ gui/src-tauri/gen/
 *.log
 .DS_Store
 .env
+  binaries/

@@ -11,7 +11,8 @@
     "test": "node --test \"test/**/*.test.ts\"",
     "build:cli": "esbuild src/cli.ts --bundle --platform=node --format=esm --target=node22 --main-fields=module,main --outfile=dist/cli.mjs",
     "gui:dev": "pnpm build:cli && cd gui/src-tauri && cargo tauri dev",
-    "gui:build": "pnpm build:cli && cd gui/src-tauri && cargo tauri build"
+    "gui:build": "pnpm build:cli && cd gui/src-tauri && cargo tauri build",
+    "gui:build:standalone": "pnpm build:cli && bash scripts/prepare-standalone.sh && cd gui/src-tauri && cargo tauri build --config tauri.standalone.conf.json"
   },
   "dependencies": {
     "jsonc-parser": "^3.3.1"
