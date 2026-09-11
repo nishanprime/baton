@@ -120,3 +120,33 @@ test('dry run leaves the filesystem untouched', () => {
   assert.ok(!fs.existsSync(process.env.BATON_HOME!), 'no store created');
   assert.ok(fs.statSync(path.join(a.configDir, 'projects')).isDirectory(), 'still a real dir');
 });
+
+test('pooling never shrinks the shared store', () => {
+  const a = account('.claude-one', {
+    'projects/p/one.jsonl': 'A',
+    'projects/p/nested/sub.jsonl': 'N',
+  });
+  const b = account('.claude-two', { 'projects/p/two.jsonl': 'B' });
+
+  linkAccount(claudeProvider, a);
+  const store = path.join(process.env.BATON_HOME!, 'shared', 'claude', 'projects');
+  const before = fs.readdirSync(path.join(store, 'p')).length;
+
+  linkAccount(claudeProvider, b);
+  const after = fs.readdirSync(path.join(store, 'p')).length;
+
+  assert.ok(after >= before, 'folding a second account in must not remove entries');
+  assert.equal(fs.readFileSync(path.join(store, 'p/one.jsonl'), 'utf8'), 'A');
+  assert.equal(fs.readFileSync(path.join(store, 'p/two.jsonl'), 'utf8'), 'B');
+  assert.equal(fs.readFileSync(path.join(store, 'p/nested/sub.jsonl'), 'utf8'), 'N',
+    'nested subagent transcripts survive the merge');
+});
+
+test('deeply nested transcripts survive pooling from both sides', () => {
+  const a = account('.claude-one', { 'projects/p/sess/subagents/x.jsonl': 'X' });
+  const b = account('.claude-two', { 'projects/p/sess/subagents/y.jsonl': 'Y' });
+  linkAccount(claudeProvider, a);
+  linkAccount(claudeProvider, b);
+  const dir = path.join(process.env.BATON_HOME!, 'shared', 'claude', 'projects/p/sess/subagents');
+  assert.deepEqual(fs.readdirSync(dir).sort(), ['x.jsonl', 'y.jsonl']);
+});

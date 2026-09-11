@@ -20,6 +20,61 @@ export interface LinkAction {
   detail?: string;
 }
 
+/**
+ * Count the files under a path, for the before/after check below.
+ *
+ * Pooling moves real conversation history, and a file lost in the middle of a
+ * recursive merge is silent — the directory still exists, the operation still
+ * reports success, and nobody notices until they go looking for a conversation
+ * that is not there. Counting is cheap; finding out later is not.
+ */
+function countFiles(p: string): number {
+  let total = 0;
+  const walk = (dir: string): void => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      if (e.isSymbolicLink()) continue;
+      if (e.isDirectory()) walk(path.join(dir, e.name));
+      else total++;
+    }
+  };
+  try {
+    const st = fs.statSync(p);
+    if (st.isDirectory()) walk(p);
+    else total = 1;
+  } catch {
+    return 0;
+  }
+  return total;
+}
+
+export class IntegrityError extends Error {
+  // Written out rather than declared as constructor parameter properties:
+  // Node's type-stripping runtime rejects those, and tsc does not catch it.
+  entry: string;
+  expected: number;
+  actual: number;
+  backup: string | null;
+
+  constructor(entry: string, expected: number, actual: number, backup: string | null) {
+    super(
+      `Pooling "${entry}" left the shared store with ${actual} files where it had ${expected} ` +
+        `before. Nothing further was changed.` +
+        (backup ? ` The originals are at ${backup}.` : ''),
+    );
+    this.name = 'IntegrityError';
+    this.entry = entry;
+    this.expected = expected;
+    this.actual = actual;
+    this.backup = backup;
+  }
+}
+
 export interface LinkOptions {
   dryRun?: boolean;
   /**
@@ -162,8 +217,16 @@ export function linkAccount(
         actions.push({ entry, action, detail: describe(action, dst) });
         continue;
       }
-      backupEntry(src, `${account.id}-prelink`);
+      const backup = backupEntry(src, `${account.id}-prelink`);
+      // The invariant is one-directional: a conflict legitimately drops a
+      // losing duplicate, so the count can stay flat, but folding one account
+      // in must never leave the store with FEWER files than it already had.
+      const storeBefore = countFiles(dst);
       mergeInto(src, dst, `${account.id}-conflict`);
+      const storeAfter = countFiles(dst);
+      if (storeAfter < storeBefore) {
+        throw new IntegrityError(entry, storeBefore, storeAfter, backup);
+      }
       actions.push({
         entry,
         action: !dstExists ? 'moved-to-store' : srcIsDir ? 'merged-into-store' : fileAction,
