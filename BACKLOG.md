@@ -8,8 +8,8 @@ command or reading the code that implements it; nothing is listed as done on the
 strength of a commit message. Where a claim could not be verified on this
 machine, it says so.
 
-Where the project stands: `tsc --noEmit` is clean and the suite is 244 tests,
-242 passing, 2 skipped because fish is not installed here. The CLI is the
+Where the project stands: `tsc --noEmit` is clean and the suite is 268 tests,
+266 passing, 2 skipped because fish is not installed here. The CLI is the
 complete surface. The GUI is the younger half and is being built in a parallel
 pass; it now has accounts, editors, history, usage, backups and settings, and it
 shows the CLI's own dry run before anything destructive.
@@ -51,27 +51,24 @@ code paths no test exercised — see §2.2.
 
 ## 2. Still open
 
-### 2.1 `setup` pools without opening a snapshot
+### 2.1 ~~`setup` pools without opening a snapshot~~ — fixed
 
-`setup.ts:246` calls `linkAccount` in a loop with no `withSnapshot` around it,
-so a first-run pooling writes one snapshot directory per backed-up entry rather
-than one for the operation. `cmdLink` wraps itself correctly; the walkthrough
-does not. Each snapshot has a manifest and is restorable, so this is untidy
-rather than dangerous — but it is the same shape the retention work set out to
-remove, and first-run is when the copies are largest.
+Closed. `setup` now wraps its loop in `withSnapshot('setup:link')` and prunes
+afterwards, matching `cmdLink`. Writing the test for it also turned up that a
+dry run created `.baton/backups`, because `withSnapshot` reserves its directory
+up front to claim the id; a dry run now opens no snapshot at all.
 
-### 2.2 The commands that write are untested
+### 2.2 The commands that write are untested — mostly closed
 
-- Nothing covers `sessions.ts` on either platform, and the Windows path has
-  never been run on Windows.
-- CI runs every read-only command with `--json` for a zero exit and
-  `node --check`s the GUI frontend. That is a smoke test: it asserts nothing
-  about the output. Nothing exercises `use`, `remove`, `rename`, `unlink`,
-  `uninstall`, `alias`, `backups prune`/`restore`, or the terminal commands
-  `env`, `init`, `shell`, `exec` — which is exactly where all four bugs in §1
-  were living.
+- `test/cli.test.ts` now drives the real binary against a throwaway HOME and
+  covers `link`, `remove`, `alias`, `settings set`, `backups prune`,
+  `uninstall`, `env`, `preflight` and the failure paths. `test/sessions.test.ts`
+  covers session detection including the Windows path shape.
+- Still true: the Windows path has never been *run* on Windows, only its parsing
+  tested. `rename`, `shell` and `exec` have no end-to-end test — the first is
+  interactive-by-design and the other two spawn a shell.
 - The two skipped tests are the fish ones. They skip when fish is absent, which
-  it is here, so fish quoting is unexercised on this machine.
+  it is here, so fish quoting is generated but unexercised on this machine.
 
 ### 2.3 Attribution only advances when Baton runs
 
