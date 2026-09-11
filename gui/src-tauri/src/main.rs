@@ -6,7 +6,10 @@ use std::process::Command;
 use serde_json::Value;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter, Listener, Manager};
+
+/// The tray is looked up by id whenever its menu has to be rebuilt.
+const TRAY_ID: &str = "baton-tray";
 
 /// Parse a `vX.Y.Z` directory name into something sortable.
 fn semver_key(name: &str) -> (u64, u64, u64) {
@@ -105,7 +108,11 @@ fn cli_path(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 /// Run the CLI in --json mode and parse what it prints.
-fn run_cli(app: &AppHandle, args: &[&str]) -> Result<Value, String> {
+///
+/// The payload comes back whole, an in-band `ok: false` included, because some
+/// commands answer a refusal with structure the UI has to render (`remove`
+/// returns refusals[]). Callers that only want a value use `run_cli`.
+fn cli_json(app: &AppHandle, args: &[&str]) -> Result<Value, String> {
     let node = resolve_node()?;
     let cli = cli_path(app)?;
 
@@ -127,7 +134,13 @@ fn run_cli(app: &AppHandle, args: &[&str]) -> Result<Value, String> {
         )
     })?;
 
-    // The CLI reports its own failures in-band so the message survives.
+    Ok(parsed)
+}
+
+/// Run the CLI and treat its in-band failure as an error, so the message lands
+/// in the UI's error path instead of being mistaken for a result.
+fn run_cli(app: &AppHandle, args: &[&str]) -> Result<Value, String> {
+    let parsed = cli_json(app, args)?;
     if parsed.get("ok") == Some(&Value::Bool(false)) {
         return Err(parsed
             .get("error")
@@ -136,6 +149,36 @@ fn run_cli(app: &AppHandle, args: &[&str]) -> Result<Value, String> {
             .to_string());
     }
     Ok(parsed)
+}
+
+/// Quote one argument for a POSIX shell. Account directories and the bundle's
+/// Resources path both routinely contain spaces.
+fn sh_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', r"'\''"))
+}
+
+/// Escape a string for an AppleScript double-quoted literal.
+fn applescript_quote(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+/// Hand a ready-made shell command to Terminal.app.
+fn open_terminal(command: &str) -> Result<(), String> {
+    let script = format!(
+        r#"tell application "Terminal"
+            activate
+            do script "{}"
+        end tell"#,
+        applescript_quote(command)
+    );
+    let status = Command::new("osascript")
+        .args(["-e", &script])
+        .status()
+        .map_err(|e| format!("could not open Terminal: {e}"))?;
+    if !status.success() {
+        return Err("Terminal refused to run the command. Is it blocked by automation permissions?".into());
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -200,18 +243,169 @@ fn doctor(app: AppHandle) -> Result<Value, String> {
 /// mean copying a path by hand.
 #[tauri::command]
 fn open_login_terminal(command: String) -> Result<(), String> {
-    let script = format!(
-        r#"tell application "Terminal"
-            activate
-            do script "{}"
-        end tell"#,
-        command.replace('\\', "\\\\").replace('"', "\\\"")
+    open_terminal(&command)
+}
+
+/// Open a terminal already bound to an account, via the CLI's own `shell`.
+#[tauri::command]
+fn open_terminal_on_account(app: AppHandle, account: String) -> Result<(), String> {
+    let node = resolve_node()?;
+    let cli = cli_path(&app)?;
+    let command = format!(
+        "{} {} shell {}",
+        sh_quote(&node),
+        sh_quote(&cli.to_string_lossy()),
+        sh_quote(&account)
     );
-    Command::new("osascript")
-        .args(["-e", &script])
+    open_terminal(&command)
+}
+
+/// Reveal a path in the platform file manager.
+///
+/// "Reveal" means select the item inside its folder, not open it: a config
+/// directory opened is a window full of dotfiles, a snapshot opened is a
+/// tarball handed to Archive Utility.
+#[tauri::command]
+fn open_in_finder(path: String) -> Result<(), String> {
+    let target = PathBuf::from(&path);
+    if !target.exists() {
+        return Err(format!("{path} is no longer there"));
+    }
+
+    #[cfg(target_os = "macos")]
+    let mut cmd = {
+        let mut c = Command::new("open");
+        c.arg("-R").arg(&target);
+        c
+    };
+    #[cfg(target_os = "windows")]
+    let mut cmd = {
+        let mut c = Command::new("explorer");
+        c.arg(format!("/select,{}", target.display()));
+        c
+    };
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let mut cmd = {
+        // No file manager here agrees on how to select an item, so settle for
+        // opening the folder that contains it.
+        let dir = target.parent().unwrap_or(&target).to_path_buf();
+        let mut c = Command::new("xdg-open");
+        c.arg(dir);
+        c
+    };
+
+    let status = cmd
         .status()
-        .map_err(|e| format!("could not open Terminal: {e}"))?;
+        .map_err(|e| format!("could not open the file manager: {e}"))?;
+    if !status.success() {
+        return Err(format!("the file manager refused to reveal {path}"));
+    }
     Ok(())
+}
+
+#[tauri::command]
+fn accounts(app: AppHandle) -> Result<Value, String> {
+    run_cli(&app, &["accounts"])
+}
+
+#[tauri::command]
+fn reauth_command(app: AppHandle, account: String) -> Result<Value, String> {
+    run_cli(&app, &["reauth", account.as_str()])
+}
+
+/// Remove an account, or report why the CLI will not.
+///
+/// This one deliberately bypasses `run_cli`: a refusal arrives as
+/// `{ok: false, refusals: [...]}`, and each refusal carries a code, a message
+/// and whether --force can override it. Collapsing that to an error string
+/// would leave the UI with nothing to offer but the text.
+#[tauri::command]
+fn remove_account(
+    app: AppHandle,
+    account: String,
+    delete_history: bool,
+    force: bool,
+    dry_run: bool,
+) -> Result<Value, String> {
+    let mut args: Vec<&str> = vec!["remove", account.as_str()];
+    if delete_history {
+        args.push("--delete-history");
+    }
+    if force {
+        args.push("--force");
+    }
+    if dry_run {
+        args.push("--dry-run");
+    }
+
+    let result = cli_json(&app, &args)?;
+    // A refusal or a dry run changed nothing, so nothing has to refresh.
+    if result.get("ok") == Some(&Value::Bool(true)) && !dry_run {
+        let _ = app.emit("accounts-changed", ());
+    }
+    Ok(result)
+}
+
+#[tauri::command]
+fn health(app: AppHandle) -> Result<Value, String> {
+    run_cli(&app, &["health"])
+}
+
+#[tauri::command]
+fn sessions(app: AppHandle) -> Result<Value, String> {
+    run_cli(&app, &["sessions"])
+}
+
+#[tauri::command]
+fn usage_report(app: AppHandle) -> Result<Value, String> {
+    run_cli(&app, &["usage"])
+}
+
+#[tauri::command]
+fn backups_list(app: AppHandle) -> Result<Value, String> {
+    run_cli(&app, &["backups"])
+}
+
+#[tauri::command]
+fn backups_prune(app: AppHandle, dry_run: bool) -> Result<Value, String> {
+    let mut args = vec!["backups", "prune"];
+    if dry_run {
+        args.push("--dry-run");
+    }
+    let result = run_cli(&app, &args)?;
+    if !dry_run {
+        let _ = app.emit("accounts-changed", ());
+    }
+    Ok(result)
+}
+
+#[tauri::command]
+fn backups_restore(app: AppHandle, id: String, dry_run: bool) -> Result<Value, String> {
+    let mut args = vec!["backups", "restore", id.as_str()];
+    if dry_run {
+        args.push("--dry-run");
+    }
+    let result = run_cli(&app, &args)?;
+    // A restore can put a whole account back, so the tray and the window both
+    // need to look again.
+    if !dry_run {
+        let _ = app.emit("accounts-changed", ());
+    }
+    Ok(result)
+}
+
+#[tauri::command]
+fn preflight(app: AppHandle) -> Result<Value, String> {
+    run_cli(&app, &["preflight"])
+}
+
+/// Set or clear an account's display name. An empty alias clears it, which is
+/// what the CLI does with an empty positional.
+#[tauri::command]
+fn set_alias(app: AppHandle, account: String, alias: String) -> Result<Value, String> {
+    let result = run_cli(&app, &["alias", account.as_str(), alias.as_str()])?;
+    let _ = app.emit("accounts-changed", ());
+    Ok(result)
 }
 
 #[tauri::command]
@@ -226,36 +420,63 @@ fn apply_link(app: AppHandle) -> Result<Value, String> {
     Ok(result)
 }
 
-/// Build the tray menu from whatever accounts currently exist.
-fn build_tray(app: &AppHandle) -> tauri::Result<()> {
-    let accounts: Vec<(String, String)> = status(app.clone())
-        .ok()
-        .and_then(|v| {
-            let providers = v.get("providers")?.as_array()?.clone();
-            let first = providers.first()?.clone();
-            let list = first.get("accounts")?.as_array()?.clone();
-            Some(
-                list.iter()
-                    .filter_map(|a| {
-                        let id = a.get("id")?.as_str()?.to_string();
-                        let email = a
-                            .get("email")
-                            .and_then(Value::as_str)
-                            .unwrap_or("not logged in")
-                            .to_string();
-                        Some((id, email))
-                    })
-                    .collect(),
-            )
-        })
+/// One row of the tray's account list.
+struct TrayAccount {
+    id: String,
+    label: String,
+}
+
+/// Read the account list the tray shows, marking the ones an editor is bound to.
+///
+/// Failure is deliberately quiet here: the tray is a menu, not a report. An
+/// empty list becomes a "No accounts found" row rather than no menu at all.
+fn tray_accounts(app: &AppHandle) -> Vec<TrayAccount> {
+    let Ok(status) = status(app.clone()) else {
+        return Vec::new();
+    };
+    let list = status
+        .get("providers")
+        .and_then(Value::as_array)
+        .and_then(|providers| providers.first())
+        .and_then(|provider| provider.get("accounts"))
+        .and_then(Value::as_array)
+        .cloned()
         .unwrap_or_default();
 
+    list.iter()
+        .filter_map(|a| {
+            let id = a.get("id")?.as_str()?.to_string();
+            let name = a
+                .get("displayName")
+                .and_then(Value::as_str)
+                .unwrap_or(id.as_str());
+            // displayEmail already spells out "not logged in" when there is no
+            // credential, which is the answer a blank would have hidden.
+            let email = a
+                .get("displayEmail")
+                .or_else(|| a.get("email"))
+                .and_then(Value::as_str)
+                .unwrap_or("not logged in");
+            // usedBy lists the editors currently pointed at this account, so a
+            // non-empty list is what "current" means.
+            let in_use = a
+                .get("usedBy")
+                .and_then(Value::as_array)
+                .is_some_and(|hosts| !hosts.is_empty());
+            let mark = if in_use { "• " } else { "   " };
+            Some(TrayAccount { label: format!("{mark}{name}  ({email})"), id })
+        })
+        .collect()
+}
+
+/// Build the tray menu from an account list already read off the main thread.
+fn tray_menu(app: &AppHandle, accounts: &[TrayAccount]) -> tauri::Result<Menu<tauri::Wry>> {
     let menu = Menu::new(app)?;
-    for (id, email) in &accounts {
+    for account in accounts {
         menu.append(&MenuItem::with_id(
             app,
-            format!("use:{id}"),
-            format!("Switch to {id}  ({email})"),
+            format!("use:{}", account.id),
+            &account.label,
             true,
             None::<&str>,
         )?)?;
@@ -267,21 +488,24 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     menu.append(&MenuItem::with_id(app, "open", "Open Baton…", true, None::<&str>)?)?;
     menu.append(&PredefinedMenuItem::separator(app)?)?;
     menu.append(&PredefinedMenuItem::quit(app, Some("Quit Baton"))?)?;
+    Ok(menu)
+}
 
-    TrayIconBuilder::with_id("baton-tray")
+/// Create the tray icon and give it its first menu.
+fn build_tray(app: &AppHandle) -> tauri::Result<()> {
+    let menu = tray_menu(app, &tray_accounts(app))?;
+
+    TrayIconBuilder::with_id(TRAY_ID)
         .icon(app.default_window_icon().unwrap().clone())
         .menu(&menu)
         .show_menu_on_left_click(true)
         .on_menu_event(|app, event| {
             let id = event.id().as_ref().to_string();
             if let Some(account) = id.strip_prefix("use:") {
-                match switch_account(app.clone(), account.to_string(), None) {
-                    Ok(_) => {
-                        let _ = app.emit("accounts-changed", ());
-                    }
-                    Err(e) => {
-                        let _ = app.emit("baton-error", e);
-                    }
+                // switch_account emits accounts-changed itself, which is what
+                // rebuilds this menu.
+                if let Err(e) = switch_account(app.clone(), account.to_string(), None) {
+                    let _ = app.emit("baton-error", e);
                 }
             } else if id == "open" {
                 if let Some(w) = app.get_webview_window("main") {
@@ -294,23 +518,69 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
+/// Rebuild the tray menu after something changed underneath it.
+///
+/// The list comes from the CLI, which is a process spawn — far too slow to run
+/// on the main thread, where it would freeze the menu mid-click. Menus are a
+/// main-thread resource though, so read off-thread and apply back on it.
+fn refresh_tray(app: &AppHandle) {
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let accounts = tray_accounts(&app);
+        let handle = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            let Some(tray) = handle.tray_by_id(TRAY_ID) else {
+                return;
+            };
+            match tray_menu(&handle, &accounts) {
+                Ok(menu) => {
+                    let _ = tray.set_menu(Some(menu));
+                }
+                // Leave the old menu in place: stale rows still switch
+                // accounts, whereas a tray with no menu does nothing at all.
+                Err(e) => {
+                    let _ = handle.emit("baton-error", format!("could not refresh the tray menu: {e}"));
+                }
+            }
+        });
+    });
+}
+
 fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             status,
+            accounts,
             switch_account,
             preview_link,
             apply_link,
             settings,
             set_setting,
+            set_alias,
             add_account,
+            remove_account,
+            reauth_command,
+            health,
+            sessions,
+            usage_report,
+            backups_list,
+            backups_prune,
+            backups_restore,
+            preflight,
             doctor,
             history,
             autoswitch,
-            open_login_terminal
+            open_login_terminal,
+            open_terminal_on_account,
+            open_in_finder
         ])
         .setup(|app| {
             build_tray(app.handle())?;
+            // The menu used to be built once and then went stale: it never
+            // followed a switch, a rename or a removal. Every mutation emits
+            // accounts-changed, so rebuild on it.
+            let handle = app.handle().clone();
+            app.listen("accounts-changed", move |_| refresh_tray(&handle));
             Ok(())
         })
         .run(tauri::generate_context!())
