@@ -1,0 +1,74 @@
+name: Release
+
+# Builds installable artifacts on tag. Signing is opt-in: without the secrets
+# this produces a working but UNSIGNED app, which macOS will quarantine on
+# download. docs/INSTALL.md tells recipients what that looks like and why.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-latest, label: macOS (Apple silicon), target: aarch64-apple-darwin }
+          - { os: macos-13, label: macOS (Intel), target: x86_64-apple-darwin }
+          - { os: ubuntu-latest, label: Linux, target: x86_64-unknown-linux-gnu }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 10 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - uses: dtolnay/rust-toolchain@stable
+        with: { targets: '${{ matrix.target }}' }
+
+      - name: Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
+      - run: pnpm exec tsc --noEmit
+
+      - name: Build the app
+        working-directory: gui/src-tauri
+        run: cargo install tauri-cli --version "^2.0" --locked && cargo tauri build
+        env:
+          # Empty unless the repo has a Developer ID. Tauri falls back to an
+          # ad-hoc signature, which works locally and is quarantined on download.
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+      - name: Say whether this build is signed
+        if: runner.os == 'macOS'
+        run: |
+          APP=gui/src-tauri/target/release/bundle/macos/Baton.app
+          if codesign -dv "$APP" 2>&1 | grep -q adhoc; then
+            echo "::warning::Unsigned (ad-hoc). Recipients must clear the quarantine flag — see docs/INSTALL.md."
+          else
+            echo "Signed with a Developer ID."
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: baton-${{ matrix.target }}
+          path: |
+            gui/src-tauri/target/release/bundle/dmg/*.dmg
+            gui/src-tauri/target/release/bundle/appimage/*.AppImage
+            gui/src-tauri/target/release/bundle/deb/*.deb
+          if-no-files-found: warn
