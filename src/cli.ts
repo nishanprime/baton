@@ -1,11 +1,12 @@
 #!/usr/bin/env node
+import fs, { existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { PROVIDERS, getProvider, defaultProvider } from './core/registry.ts';
 import { linkAccount, unlinkAccount } from './core/share.ts';
 import { switchHost } from './core/switch.ts';
 import { appHome, sharedStore } from './core/paths.ts';
 import { runSetup, createAccount, loginHint } from './core/setup.ts';
-import { loadSettings, setSetting, setAlias, settingsPath, SCHEMA } from './core/settings.ts';
+import { loadSettings, saveSettings, setSetting, setAlias, settingsPath, SCHEMA } from './core/settings.ts';
 import { accountLabel, accountEmail, makeProjectMasker, maskPath, maskPathsInText } from './core/display.ts';
 import { listConversations } from './core/history.ts';
 import {
@@ -838,6 +839,75 @@ function cmdUnpin(): void {
   console.log(removed ? `${green('✓')} unpinned ${dir}` : yellow(`${dir} was not pinned`));
 }
 
+// ---------------------------------------------------------------- config transfer
+
+const CONFIG_VERSION = 1;
+
+/**
+ * Baton's own preferences, for moving to another machine.
+ *
+ * Deliberately not included: credentials (Baton never touches them),
+ * conversation history (gigabytes, and pooling is per-machine), and absolute
+ * config-dir paths, which differ per machine and per user. What transfers is
+ * the part that took thought — retention policy, auto-switch behaviour,
+ * aliases — keyed by account id so it lands wherever those accounts live.
+ */
+function cmdExport(): void {
+  const settings = loadSettings();
+  const payload = {
+    version: CONFIG_VERSION,
+    exportedFrom: process.platform,
+    settings,
+    // Pins are absolute paths and rarely survive a move; carried so the user
+    // can see and re-point them rather than losing them silently.
+    pins: listPins(),
+  };
+  if (asJson) return emit({ ok: true, ...payload });
+  console.log(JSON.stringify(payload, null, 2));
+}
+
+function cmdImport(): void {
+  const file = positional[1];
+  if (!file) throw new Error('Usage: baton import <file.json> [--dry-run]');
+
+  let payload: { version?: number; settings?: unknown; pins?: { dir: string; accountId: string }[] };
+  try {
+    payload = JSON.parse(fs.readFileSync(file, 'utf8')) as typeof payload;
+  } catch (err) {
+    throw new Error(`Could not read ${file}: ${(err as Error).message}`);
+  }
+  if (payload.version !== CONFIG_VERSION) {
+    throw new Error(`Unsupported export version ${payload.version ?? '(missing)'}; expected ${CONFIG_VERSION}.`);
+  }
+
+  const incoming = payload.settings as Partial<ReturnType<typeof loadSettings>> | undefined;
+  if (!incoming) throw new Error('That file carries no settings.');
+
+  const current = loadSettings();
+  const merged = { ...current, ...incoming, display: { ...current.display, ...incoming.display } };
+  const known = provided(payload.pins ?? []);
+
+  if (!dryRun) {
+    saveSettings(merged);
+    for (const pin of known.valid) setPin(pin.dir, pin.accountId);
+  }
+
+  if (asJson) {
+    return emit({ ok: true, dryRun, applied: Object.keys(incoming), pins: known });
+  }
+  console.log(`${dryRun ? yellow('[dry-run]') : green('✓')} ${dryRun ? 'would import' : 'imported'} settings from ${file}`);
+  console.log(dim(`  ${known.valid.length} pin(s) applied, ${known.missing.length} skipped`));
+  for (const p of known.missing) {
+    console.log(yellow(`  ⚠ pin for ${p.dir} skipped — that directory does not exist here`));
+  }
+}
+
+/** Split incoming pins by whether their directory exists on this machine. */
+function provided(pins: { dir: string; accountId: string }[]) {
+  const valid = pins.filter((p) => existsSync(p.dir));
+  return { valid, missing: pins.filter((p) => !existsSync(p.dir)) };
+}
+
 // ---------------------------------------------------------------- uninstall
 
 /**
@@ -947,6 +1017,8 @@ const HELP = `${bold('baton')} — switch AI coding accounts across editors, kee
   baton link [account|--all]      share history across accounts (run once)
   baton unlink <account>          restore an account to standalone files
   baton uninstall                 undo Baton entirely (try --dry-run first)
+  baton export > baton.json       your settings, aliases and pins
+  baton import <file>             apply them on another machine
   baton alias <account> [name]    set a display name (screenshots); empty clears
   baton settings [set <k> <v>]    view or change preferences
   baton history [--offset n]      browse pooled conversations (50 per page)
@@ -999,6 +1071,8 @@ async function main(): Promise<void> {
     case 'sessions': cmdSessions(); break;
     case 'usage': cmdUsage(); break;
     case 'uninstall': cmdUninstall(); break;
+    case 'export': cmdExport(); break;
+    case 'import': cmdImport(); break;
     case 'pin': cmdPin(); break;
     case 'unpin': cmdUnpin(); break;
     case 'autoswitch': cmdAutoswitch(); break;
