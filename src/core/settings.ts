@@ -38,6 +38,8 @@ export interface Settings {
     /** Snapshots older than this are dropped, subject to keepCount. */
     maxAgeDays: number;
   };
+  /** Directory -> account id. See pins.ts; a pin covers the whole subtree. */
+  pins?: Record<string, string>;
   /** Print the "reload the window" reminder after a switch. */
   showReloadHint: boolean;
 }
@@ -47,6 +49,7 @@ export const DEFAULTS: Settings = {
   defaultAccountByHost: {},
   display: { aliases: {}, hideEmails: false, hideProjects: false },
   backups: { keepCount: 10, maxTotalMb: 500, maxAgeDays: 14 },
+  pins: {},
   showReloadHint: true,
 };
 

@@ -24,6 +24,7 @@ import { accountHealth, UNAVAILABLE_FIELDS } from './core/health.ts';
 import { findLiveSessions } from './core/sessions.ts';
 import { buildUsageReport } from './core/usage.ts';
 import { recordObservation, attributionStats } from './core/attribution.ts';
+import { listPins, setPin, removePin, pinFor } from './core/pins.ts';
 import { findLimitEvents } from './core/limits.ts';
 import { loadState, saveState } from './core/state.ts';
 import type { Account, Host, Provider } from './core/types.ts';
@@ -643,9 +644,18 @@ function cmdBackups(): void {
 
 function cmdShell(): void {
   const provider = resolveProvider();
-  const key = positional[1];
-  if (!key) throw new Error('Usage: baton shell <account>');
+  const pinned = pinFor(process.cwd());
+  const key = positional[1] ?? pinned?.accountId;
+  if (!key) {
+    throw new Error(
+      'Usage: baton shell <account>\n' +
+        'Or pin this directory once with `baton pin <account>` and omit the argument.',
+    );
+  }
   const account = findAccount(provider.discoverAccounts(), key);
+  if (!positional[1] && pinned) {
+    console.error(dim(`using ${account.id}, pinned at ${pinned.dir}`));
+  }
   const plan = shellCommand(provider, account);
   if (asJson) return emit({ ok: true, account: account.id, ...plan });
   console.log(dim(`starting a shell on ${account.id} — exit to return`));
@@ -703,6 +713,89 @@ function cmdPreflight(): void {
   console.log(renderPreflight(report));
 }
 
+// ---------------------------------------------------------------- pins
+
+function cmdPin(): void {
+  const provider = resolveProvider();
+  const key = positional[1];
+  const dir = positional[2] ?? process.cwd();
+
+  if (!key) {
+    const pins = listPins();
+    if (asJson) return emit({ ok: true, pins, here: pinFor(process.cwd()) });
+    console.log(`${bold('Pinned directories')}\n`);
+    for (const p of pins) console.log(`  ${bold(p.accountId.padEnd(16))} ${dim(p.dir)}`);
+    if (!pins.length) console.log(dim('  none'));
+    const here = pinFor(process.cwd());
+    console.log(`\n${dim(here ? `Here resolves to ${here.accountId} (via ${here.dir})` : 'This directory is not pinned.')}`);
+    return;
+  }
+
+  const account = findAccount(provider.discoverAccounts(), key);
+  const pin = setPin(dir, account.id);
+  if (asJson) return emit({ ok: true, ...pin });
+  console.log(`${green('✓')} ${bold(pin.dir)} → ${bold(account.id)}`);
+  console.log(dim('Covers this directory and everything under it. `baton shell` here needs no argument.'));
+}
+
+function cmdUnpin(): void {
+  const dir = positional[1] ?? process.cwd();
+  const removed = removePin(dir);
+  if (asJson) return emit({ ok: true, removed, dir });
+  console.log(removed ? `${green('✓')} unpinned ${dir}` : yellow(`${dir} was not pinned`));
+}
+
+// ---------------------------------------------------------------- uninstall
+
+/**
+ * Undo Baton, leaving every account standalone again.
+ *
+ * The shared store is the only copy of pooled history, so this materialises it
+ * back into each account before removing anything. Anyone who adopts a tool
+ * that rearranges their files deserves a way out that does not require trusting
+ * the tool a second time.
+ */
+function cmdUninstall(): void {
+  const provider = resolveProvider();
+  const accounts = provider.discoverAccounts();
+  const hosts = provider.discoverHosts().filter((h) => h.configDir);
+
+  const plan = accounts.map((a) => ({
+    account: a.id,
+    entries: unlinkAccount(provider, a, { dryRun: true }).map((x) => x.entry),
+  }));
+
+  if (asJson && dryRun) {
+    return emit({ ok: true, dryRun: true, plan, hosts: hosts.map((h) => h.id), appHome: appHome() });
+  }
+
+  if (!dryRun && !flags.has('--yes')) {
+    throw new Error(
+      'This restores every account to standalone files and leaves editor settings pointing where they are.\n' +
+        'Re-run with --yes once you have read `baton uninstall --dry-run`.',
+    );
+  }
+
+  const done = accounts.map((a) => ({
+    account: a.id,
+    entries: unlinkAccount(provider, a, { dryRun }).map((x) => x.entry),
+  }));
+
+  if (asJson) return emit({ ok: true, dryRun, accounts: done, appHome: appHome() });
+
+  for (const r of done) {
+    console.log(`${dryRun ? yellow('[dry-run]') : green('✓')} ${bold(r.account)} ${dim(`${r.entries.length} entries materialised`)}`);
+  }
+  if (dryRun) {
+    console.log(dim('\nNothing was changed. Re-run with --yes to apply.'));
+    return;
+  }
+  console.log(`\n${green('Done.')} Every account holds its own files again.`);
+  console.log(dim(`Baton's own state is still at ${appHome()} — delete it when you are sure:`));
+  console.log(dim(`  rm -rf ${appHome()}`));
+  console.log(dim('Editors still point at their accounts; that is just an env var and is harmless.'));
+}
+
 // ---------------------------------------------------------------- doctor
 
 function cmdDoctor(): void {
@@ -758,6 +851,7 @@ const HELP = `${bold('baton')} — switch AI coding accounts across editors, kee
   baton use <account> [opts]      point an editor at an account
   baton link [account|--all]      share history across accounts (run once)
   baton unlink <account>          restore an account to standalone files
+  baton uninstall                 undo Baton entirely (try --dry-run first)
   baton alias <account> [name]    set a display name (screenshots); empty clears
   baton settings [set <k> <v>]    view or change preferences
   baton history [--offset n]      browse pooled conversations (50 per page)
@@ -770,6 +864,8 @@ Terminal
   baton exec <account> -- <cmd>   run one command under an account
   baton env <account>             printable exports: eval "$(baton env work)"
   baton init <zsh|bash|fish>      shell integration for the current shell
+  baton pin [account] [dir]       pin a directory tree to an account; bare to list
+  baton unpin [dir]               remove a pin
 
 Backups
   baton backups                   list snapshots and the retention policy
@@ -806,6 +902,9 @@ async function main(): Promise<void> {
     case 'health': cmdHealth(); break;
     case 'sessions': cmdSessions(); break;
     case 'usage': cmdUsage(); break;
+    case 'uninstall': cmdUninstall(); break;
+    case 'pin': cmdPin(); break;
+    case 'unpin': cmdUnpin(); break;
     case 'autoswitch': cmdAutoswitch(); break;
     case 'alias': cmdAlias(); break;
     case 'doctor': cmdDoctor(); break;
