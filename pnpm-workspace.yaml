@@ -1,0 +1,12 @@
+# esbuild's postinstall only verifies the platform binary that its optional
+# dependency already provides — the bundler works without it. pnpm 10+ blocks
+# install scripts by default and pnpm 11 makes that a hard error, so a fresh
+# clone failed on `pnpm install` before anything could be built.
+#
+# Both spellings are here on purpose: pnpm 11 reads allowBuilds, pnpm 10 reads
+# onlyBuiltDependencies, and contributors will not all be on the same version.
+allowBuilds:
+  esbuild: true
+
+onlyBuiltDependencies:
+  - esbuild

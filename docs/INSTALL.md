@@ -19,9 +19,23 @@ git clone https://github.com/nishanprime/baton.git
 cd baton
 pnpm install
 
-node src/cli.ts setup      # guided walkthrough — previews everything before writing
-pnpm gui:build             # optional: builds Baton.app
+pnpm setup     # guided walkthrough — previews everything before writing
+pnpm build     # optional: builds Baton.app (needs Rust)
+pnpm dev       # optional: run the app with live reload
 ```
+
+Every command:
+
+| Command | Does |
+|---|---|
+| `pnpm setup` | The guided walkthrough |
+| `pnpm cli -- <args>` | Run the CLI, e.g. `pnpm cli -- accounts` |
+| `pnpm test` | The test suite |
+| `pnpm typecheck` | Types only |
+| `pnpm build` / `pnpm dev` | Build or run the app (needs Rust) |
+| `pnpm build:cli` | Bundle the CLI alone; no Rust needed |
+
+There is no `build:dev` — `pnpm dev` runs the app.
 
 An app you built yourself is not quarantined, so it opens normally.
 

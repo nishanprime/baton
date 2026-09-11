@@ -7,8 +7,12 @@
     "baton": "./src/cli.ts"
   },
   "scripts": {
+    "setup": "node src/cli.ts setup",
     "cli": "node src/cli.ts",
+    "dev": "pnpm gui:dev",
+    "build": "pnpm gui:build",
     "test": "node --test \"test/**/*.test.ts\"",
+    "typecheck": "tsc --noEmit",
     "build:cli": "esbuild src/cli.ts --bundle --platform=node --format=esm --target=node22 --main-fields=module,main --outfile=dist/cli.mjs",
     "gui:dev": "pnpm build:cli && cd gui/src-tauri && cargo tauri dev",
     "gui:build": "pnpm build:cli && cd gui/src-tauri && cargo tauri build",
@@ -18,7 +22,8 @@
     "jsonc-parser": "^3.3.1"
   },
   "engines": {
-    "node": ">=22.18"
+    "node": ">=22.18",
+    "pnpm": ">=10"
   },
   "license": "MIT",
   "devDependencies": {
