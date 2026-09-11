@@ -297,9 +297,14 @@ fn open_in_finder(path: String) -> Result<(), String> {
     let status = cmd
         .status()
         .map_err(|e| format!("could not open the file manager: {e}"))?;
+    // explorer.exe exits non-zero even when it did reveal the file, so its
+    // status says nothing worth reporting.
+    #[cfg(not(target_os = "windows"))]
     if !status.success() {
         return Err(format!("the file manager refused to reveal {path}"));
     }
+    #[cfg(target_os = "windows")]
+    let _ = status;
     Ok(())
 }
 

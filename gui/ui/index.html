@@ -7,16 +7,21 @@
 <link rel="stylesheet" href="app.css" />
 </head>
 <body>
-  <header><h1>Baton</h1><div class="sub" id="sub">Loading…</div></header>
-  <nav>
-    <button data-tab="accounts" aria-selected="true">Accounts</button>
-    <button data-tab="editors" aria-selected="false">Editors</button>
-    <button data-tab="history" aria-selected="false">History</button>
-    <button data-tab="settings" aria-selected="false">Settings</button>
+  <header>
+    <div class="grow"><h1>Baton</h1><div class="sub" id="sub">Loading…</div></div>
+    <button class="icon" id="reload" title="Reload everything" aria-label="Reload everything">&#8635;</button>
+  </header>
+  <nav role="tablist" aria-label="Sections">
+    <button role="tab" data-tab="accounts" aria-selected="true">Accounts</button>
+    <button role="tab" data-tab="editors" aria-selected="false">Editors</button>
+    <button role="tab" data-tab="history" aria-selected="false">History</button>
+    <button role="tab" data-tab="usage" aria-selected="false">Usage</button>
+    <button role="tab" data-tab="backups" aria-selected="false">Backups</button>
+    <button role="tab" data-tab="settings" aria-selected="false">Settings</button>
   </nav>
-  <div id="msg"></div>
-  <main id="main"></main>
-  <div id="scrim"><div class="modal" id="modal"></div></div>
+  <div id="msgs" aria-live="polite"></div>
+  <main id="main" tabindex="-1"></main>
+  <div id="scrim"><div class="modal" id="modal" role="dialog" aria-modal="true"></div></div>
   <script type="module" src="app.js"></script>
 </body>
 </html>

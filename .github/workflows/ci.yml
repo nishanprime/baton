@@ -28,6 +28,21 @@ jobs:
       - name: CLI runs and emits valid JSON
         run: node dist/cli.mjs status --json
         shell: bash
+      - name: Every CLI command answers
+        shell: bash
+        run: |
+          set -e
+          for c in status accounts health sessions usage backups doctor preflight settings pin; do
+            node dist/cli.mjs "$c" --json > /dev/null
+          done
+          node dist/cli.mjs history --limit 1 --json > /dev/null
+          node dist/cli.mjs link --all --dry-run --json > /dev/null
+      - name: GUI frontend parses
+        shell: bash
+        run: |
+          node --check gui/ui/app.js
+          test -f gui/ui/index.html
+          test -f gui/ui/app.css
 
   typecheck:
     runs-on: ubuntu-latest

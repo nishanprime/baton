@@ -1,8 +1,8 @@
 # Baton
 
-Switch between multiple AI coding accounts across your editors, keeping **one shared conversation history**.
+Switch between multiple AI coding accounts — in your editors and in your terminal — keeping **one shared conversation history**.
 
-When a subscription hits its limit mid-task, pass the baton: point the editor at another account, reload the window, and `--resume` the exact same conversation. No re-explaining context, no manually editing config paths.
+When a subscription hits its limit mid-task, pass the baton: point at another account, reload the window, and `--resume` the exact same conversation. No re-explaining context, no manually editing config paths.
 
 ## The problem
 
@@ -38,12 +38,13 @@ node src/cli.ts setup
 
 `setup` is a guided walkthrough. It:
 
-1. Finds your accounts and editors, and shows what points where.
-2. Offers to create a second account if you only have one, and tells you the exact command to log into it.
-3. **Previews** the history pooling and asks before moving anything.
-4. Lets you pick a default account per editor.
+1. Opens with the preflight report — what is installed, what was found, what is running.
+2. Walks every installed provider, not just the first.
+3. Offers to create a second account, gives you the exact command to log into it, and **checks that the login actually happened** before moving on.
+4. **Previews** the history pooling and asks before moving anything.
+5. Ends with a next step either way: editors get a default account each, and a machine with no editors gets the terminal setup instead of a dead end.
 
-Nothing is written until you confirm, and everything it touches is backed up to `~/.baton/backups/<timestamp>/` first.
+Nothing is written until you confirm, and everything it touches is snapshotted first.
 
 Optionally put it on your PATH:
 
@@ -55,37 +56,214 @@ npm link      # then just `baton setup`
 
 ```bash
 baton status                   # accounts, editors, and what points where
+baton accounts                 # each account's state and its next action
 baton use work --host cursor # point one editor at an account
 baton use work --all         # every editor at once
-baton add work                 # create a new account directory to log into
 baton doctor                   # find half-applied or inconsistent bindings
-baton unlink <account>         # turn the symlinks back into real files
+baton preflight                # what is installed, found, and running
+baton history --project code   # browse the pooled conversations, 50 per page
 ```
 
-Every writing command takes `--dry-run`, which prints exactly what would change and writes nothing. `--json` gives machine-readable output — it is how the GUI drives the CLI.
+`history` takes `--search`, `--project`, `--from`, `--limit` and `--offset`; `--search` matches conversation titles and project names, not transcript contents.
+
+Every writing command takes `--dry-run`, which prints exactly what would change and writes nothing. `--json` gives machine-readable output on every command — it is how the GUI drives the CLI. `baton help` lists everything.
 
 After a switch, **reload the editor window**, then `claude --resume`. The running process holds its token in memory, so it needs the reload — but your conversations are all still there.
 
-## Menu bar app
+## The terminal
 
-A Tauri menu bar app wraps the same CLI: switch accounts from the tray, or open a window to assign accounts per editor.
+The terminal is a first-class surface, not an afterthought. It actually fits the mechanism better than an editor does: there is no settings file to rewrite, only a variable to set.
+
+```bash
+baton shell work                 # interactive subshell bound to an account; exit to return
+baton exec work -- claude -p hi  # one command under an account
+baton env work                   # prints the exports; eval them to apply
+baton init zsh                   # shell integration (zsh | bash | fish)
+```
+
+### The constraint
+
+**A child process cannot change the environment of the shell that started it.** No CLI can. So `baton shell` and `baton exec` give you a *new* process on that account, and changing the shell you are already typing in takes one of these:
+
+```bash
+eval "$(baton env work)"                  # zsh, bash
+baton env work --shell fish | source      # fish
+```
+
+Or install the shell integration once, which wraps that eval in a function:
+
+```bash
+baton init zsh >> ~/.zshrc          # bash: ~/.bash_profile on macOS, ~/.bashrc elsewhere
+baton init fish >> ~/.config/fish/config.fish
+```
+
+With it loaded, `baton env work` applies to the current shell rather than printing to it, and you get completions and a `baton_prompt` helper that prints the active account:
+
+```bash
+PROMPT='$(baton_prompt) '"$PROMPT"     # zsh, with setopt PROMPT_SUBST → [work] ~/code %
+```
+
+A shell on an account carries `BATON_ACCOUNT` and `BATON_PROVIDER` alongside the provider's own variable, so anything you write can see which account it is on.
+
+### Pinning a directory
+
+An editor binds one account for the whole application, which is the wrong granularity when one account is for client work and another is for personal projects.
+
+```bash
+baton pin clientco ~/work    # covers ~/work and everything under it
+baton shell                  # in ~/work/repo: starts on clientco, no argument needed
+baton pin                    # list pins, and what this directory resolves to
+baton unpin ~/work
+```
+
+The nearest ancestor pin wins, so a deeper pin overrides a broader one. Pins are **advisory** — they resolve a default. Nothing enforces them, because enforcing would mean intercepting every launch.
+
+## Accounts
+
+An account is a config directory plus whatever identity has been logged into it. `baton accounts` reports each one's state, why it is in that state, and what to do next.
+
+| State | Means |
+|---|---|
+| `draft` | The directory exists but nothing has ever logged in. Not usable yet. |
+| `active` | Logged in, and an editor or a live session is on it. |
+| `idle` | Logged in, bound to nothing. |
+| `spent` | Logged in, and out of quota for now. |
+
+```bash
+baton add work            # create the directory to log into
+baton reauth work         # the exact command to log this account in
+baton alias work "Work"   # cosmetic display name, for screenshots
+baton remove work         # delete the account; history is kept
+```
+
+**Every account has its own login command**, because it names that account's directory:
+
+```
+CLAUDE_CONFIG_DIR='/Users/you/.claude-work' claude
+```
+
+A generic "run `/login`" is useless when two accounts both need it. `baton accounts`, `baton reauth` and `baton doctor` all print the per-account version, ready to paste. Baton never sees the credential — the provider's own CLI does the login, into the directory the variable names.
+
+### Removing
+
+`baton remove <account>` deletes the account directory and **keeps your conversations**. History is pooled and a transcript does not record which account wrote it, so a removal can never be allowed to reach the shared store — it detaches the account's shared entries first, so the store is not even reachable through a symlink while the directory is torn down. Anything that was never pooled is copied into the snapshot before it goes.
+
+It snapshots first, and refuses when it should:
+
+- Refusals that `--force` can override: live sessions on the account, or removing the directory the provider falls back to when the variable is unset.
+- Refusals that nothing can override: anything that resolves to the shared store, your home directory, or a filesystem root.
+
+`--delete-history` opts into deleting the account's own history; even then the shared store is out of scope by construction. `--dry-run` shows the whole plan first.
+
+## Backups
+
+Baton takes a snapshot before anything destructive — every switch, link, merge and removal. One snapshot per operation, with a manifest recording where each copied path came from, which is what makes a restore possible at all.
+
+```bash
+baton backups                 # snapshots, sizes, and the retention policy
+baton backups prune           # apply retention now (--dry-run to preview)
+baton backups restore <id>    # put a snapshot back (--dry-run to preview)
+```
+
+Retention runs automatically after anything destructive, and applies in this order: **keep the newest `keepCount` whatever else the budget says**, then drop by total size, then by age. A backup you cannot restore from is worse than the disk it saves.
+
+| Setting | Default | Means |
+|---|---|---|
+| `backups.keepCount` | 10 | Newest snapshots always kept |
+| `backups.maxTotalMb` | 500 | Total budget for `~/.baton/backups` |
+| `backups.maxAgeDays` | 14 | Older snapshots dropped, subject to `keepCount` |
+
+```bash
+baton settings set backups.maxTotalMb 200
+```
+
+**Restore is itself undoable**: it takes a pre-restore snapshot before writing anything back, so restoring the wrong one is one more `baton backups restore` away from being undone.
+
+Snapshots taken before manifests existed still list, with their entries rebuilt from disk and flagged `(no manifest)`. They can be pruned; they cannot be restored path-by-path.
+
+## Usage and cost
+
+```bash
+baton usage
+```
+
+Reads every transcript in the pooled store and totals input, output, cache-write and cache-read tokens per model, then prices them at **published first-party API rates** — what this work *would have cost* on the API instead of a subscription. It is an API-equivalent figure, not a bill and not what you paid.
+
+- Rates live in [`src/providers/claude/pricing.ts`](src/providers/claude/pricing.ts), as published 2026-06, in USD per million tokens. Cache writes bill at 1.25x input and cache reads at 0.1x, except where a model publishes its own cache-read rate. Edit that file to refresh them.
+- Partner platforms (Bedrock, Vertex) price differently and are not modelled.
+- A model with no known rate still has its tokens counted and is shown as `unpriced` rather than silently priced as zero.
+- Totals cover the whole pooled store — **all accounts together**. Per-account attribution of existing history is not possible; see the note under Health.
+
+Results are cached by file mtime and size, so a second run only re-reads what changed.
+
+## Health
+
+```bash
+baton health
+```
+
+Per account: whether a limit was hit recently and when it resets, how many sessions are live and in which editors, which editors are bound, and when it was last used. Every value carries where it came from, and every *missing* value carries **why** it is missing — not recorded yet, not applicable right now, not supported on this platform, or not knowable at all. A UI rendering this should print the reason, never a blank cell.
+
+Four things Baton cannot tell you, because they are not on disk anywhere:
+
+| Not knowable | Why |
+|---|---|
+| Plan | No local file records which plan an account is on. It is only visible to an authenticated API call, and Baton never reads credentials. |
+| Credit balance | Nothing on disk carries a balance. The config directory holds settings and history, not billing state. |
+| Renewal date | Billing dates live with the provider, not in the config directory. |
+| Usage against the limit | No local file counts how much of a window has been consumed. `policy-limits.json` holds policy restrictions, not usage — that was checked. |
+
+The one local signal is the provider saying in a transcript that the limit is already hit, which is what `spent` is built from. That event records the project and the error but not the account, so it is credited to whichever account is bound now — an account you already switched away from reads as `idle`, not `spent`.
+
+Older history has the same gap: transcripts never recorded the account, and pooling merged them, so conversations from before Baton cannot be attributed. `baton sessions` writes down what the process table shows while a session is alive, which makes attribution possible from the first observation onward — never retroactively.
+
+## The app
+
+A Tauri menu bar app wraps the same CLI: switch accounts from the tray, or open a window to manage accounts, editors, history, usage, backups and settings.
 
 ```bash
 pnpm gui:dev      # run it
 pnpm gui:build    # produce Baton.app + a .dmg
 ```
 
-Building it needs [Rust](https://rustup.rs). The app still shells out to Node, so Node stays a requirement — the CLI is bundled into the app as a single file, so there is nothing else to install.
+Building it needs [Rust](https://rustup.rs). The CLI is bundled into the app as a single file, so there is nothing else to install.
 
-> On macOS a GUI app launched from Finder gets a minimal `PATH` and cannot see Homebrew or nvm installs. Baton asks your login shell where Node is. If that ever fails, set `BATON_NODE` to the absolute path.
+Two build modes:
+
+| Command | Size | Node |
+|---|---|---|
+| `pnpm gui:build` | ~4MB | Uses the Node already on the machine |
+| `pnpm gui:build:standalone` | ~120MB | Bundles a Node binary as a sidecar |
+
+The default is for people who already have Node, which is most people running an AI coding agent. The standalone build is roughly 25x larger and is for handing someone a `.dmg` who does not — it copies your own `node`, or the one at `BATON_NODE`, and re-signs it ad-hoc so macOS does not kill it on launch.
+
+> On macOS a GUI app launched from Finder gets a minimal `PATH` and cannot see Homebrew or nvm installs. The default build asks your login shell where Node is. If that ever fails, set `BATON_NODE` to the absolute path.
+
+The app shells out to the CLI for everything and holds no logic of its own, so the two never disagree about what an account is. It is also the younger half of the project: the CLI is the complete surface, and anything the window has not caught up to yet is a command away. [BACKLOG.md](BACKLOG.md) tracks the gap.
+
+## Undoing it
+
+```bash
+baton unlink <account>     # turn one account's symlinks back into real files
+baton uninstall --dry-run  # what backing out entirely would do
+baton uninstall --yes      # materialise the store back into every account
+```
+
+`uninstall` copies the shared store back into each account *before* removing anything, so backing out does not require trusting the tool a second time. Baton's own state stays at `~/.baton` for you to delete when you are sure.
+
+Pooling is also checked as it happens: folding an account into the store asserts the store never ends up with fewer files than it started with, and stops loudly if it does.
 
 ## Supported
 
 | Provider | Status |
 |---|---|
-| Claude Code | ✅ |
+| Claude Code | supported |
 
 Editors: VS Code (+ Insiders), Cursor, Antigravity, Windsurf, VSCodium, Trae.
+
+Terminal: zsh, bash, fish.
+
+Live-session detection reads the process table — `ps` on macOS and Linux, where a process's environment is readable and the account is exact. Windows lists processes through PowerShell and identifies the editor from the command line, but cannot read another process's environment without debug-level access, so the account comes back as **unknown rather than absent**. A session you can't attribute still has to stop a silent switch under a live window.
 
 ## Adding a provider
 
@@ -93,12 +271,9 @@ Nothing outside `src/providers/` is Claude-specific. A provider implements [`Pro
 
 The `SharePolicy` split is **default-deny**: anything not explicitly listed as shared stays private, so a key a provider adds in a future release never leaks between accounts.
 
-## Roadmap
+## Not done yet
 
-- Auto-detect limit exhaustion from `policy-limits.json` and offer to switch
-- Bundle Node as a Tauri sidecar so the app has no external requirement
-- Per-project account pinning
-- Signed and notarised release builds
+[BACKLOG.md](BACKLOG.md) is the honest list — what remains, what is broken, and the limitations that are properties of the data rather than missing effort.
 
 ## Note
 

@@ -8,6 +8,7 @@ import { switchHost } from './switch.ts';
 import { sharedStore, appHome, exists } from './paths.ts';
 import { preflight, renderPreflight, type PreflightReport, type ProviderReport } from './preflight.ts';
 import { PROVIDERS } from './registry.ts';
+import { loginCommandForDir } from './lifecycle.ts';
 import type { Account, Provider } from './types.ts';
 
 const bold = (s: string) => `\x1b[1m${s}\x1b[0m`;
@@ -70,8 +71,14 @@ export function createAccount(provider: Provider, name: string): string {
   return dir;
 }
 
+/**
+ * Delegates so there is one spelling of this command. The double-quoted form
+ * this used to build left `$` and backticks live to the shell, so a config dir
+ * containing either produced a command pointing somewhere other than the
+ * account it names.
+ */
 export function loginHint(provider: Provider, dir: string): string {
-  return `${provider.envVar}="${dir}" ${provider.processName ?? provider.id}`;
+  return loginCommandForDir(provider, dir);
 }
 
 /**

@@ -25,6 +25,7 @@ import { findLiveSessions } from './core/sessions.ts';
 import { buildUsageReport } from './core/usage.ts';
 import { recordObservation, attributionStats } from './core/attribution.ts';
 import { listPins, setPin, removePin, pinFor } from './core/pins.ts';
+import { notify } from './core/notify.ts';
 import { findLimitEvents } from './core/limits.ts';
 import { loadState, saveState } from './core/state.ts';
 import type { Account, Host, Provider } from './core/types.ts';
@@ -418,6 +419,17 @@ function cmdAutoswitch(): void {
     for (const host of hosts) switchHost(provider, host, to, accounts);
     base.acted = true;
     base.switched = hosts.map((h) => h.id);
+  }
+
+  // Reaches the user in the editor they are actually looking at.
+  if (isNew && settings.autoSwitch.enabled) {
+    if (base.acted) {
+      notify('Baton switched accounts', `${[...activeIds].join(', ')} hit its limit — now on ${candidate}.`);
+    } else if (candidate) {
+      notify('Account limit reached', `${[...activeIds].join(', ')} is spent. Switch to ${candidate}.`);
+    } else {
+      notify('Account limit reached', `${[...activeIds].join(', ')} is spent and there is no spare account.`);
+    }
   }
 
   if (isNew && (shouldAct || settings.autoSwitch.enabled)) {
