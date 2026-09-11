@@ -4,6 +4,7 @@ import path from 'node:path';
 import { sharedStore, backupsPath, exists } from './paths.ts';
 import { findLiveSessions, type LiveSession } from './sessions.ts';
 import { findLimitEvents, type LimitEvent } from './limits.ts';
+import { resolveAttribution } from './attribution.ts';
 import { loadSettings } from './settings.ts';
 import type { Account, Host, Provider } from './types.ts';
 
@@ -48,6 +49,12 @@ export interface AccountStatus {
   boundHosts: Host[];
   /** Newest limit event attributed to this account, when it is spent. */
   limit: LimitEvent | null;
+  /**
+   * Recent limit events that could not be traced to any account. While this is
+   * above zero, "not spent" is not the same as "fine" — it means nothing
+   * records whose limit it was.
+   */
+  unattributedLimits: number;
 }
 
 export interface ClassifyOptions {
@@ -130,12 +137,19 @@ export function classifyAccount(
     boundHosts: bound,
   };
 
+  /** Appended where a limit happened but nothing records whose it was. */
+  const unattributedNote = (n: number): string =>
+    n
+      ? ` ${n} recent limit event${n === 1 ? '' : 's'} could not be traced to an account — history from before Baton started recording that does not say which account produced it.`
+      : '';
+
   if (!hasIdentity(provider, account)) {
     const { command } = reauthCommand(provider, account);
     return {
       ...base,
       state: 'draft',
       limit: null,
+      unattributedLimits: 0,
       loginCommand: command,
       reason: mine.length
         ? 'the directory exists and a session is open, but nothing has logged in yet'
@@ -144,13 +158,20 @@ export function classifyAccount(
     };
   }
 
-  const limit = isBound ? newestLimit(provider, opts.limits, now, windowMinutes) : null;
+  const { mine: limit, unattributed } = limitsFor(
+    provider,
+    account,
+    opts.limits,
+    now,
+    windowMinutes,
+  );
 
   if (limit) {
     return {
       ...base,
       state: 'spent',
       limit,
+      unattributedLimits: unattributed,
       loginCommand: null,
       reason: limit.resets
         ? `hit its limit ${describeAge(limit.at, now)}; resets ${limit.resets}`
@@ -170,9 +191,12 @@ export function classifyAccount(
       ...base,
       state: 'active',
       limit: null,
+      unattributedLimits: unattributed,
       loginCommand: null,
       reason: `in use by ${where.join(', ')}`,
-      nextAction: 'Nothing to do — this is the account in use.',
+      nextAction: unattributed
+        ? `Nothing to do — this is the account in use.${unattributedNote(unattributed)}`
+        : 'Nothing to do — this is the account in use.',
     };
   }
 
@@ -180,9 +204,10 @@ export function classifyAccount(
     ...base,
     state: 'idle',
     limit: null,
+    unattributedLimits: unattributed,
     loginCommand: null,
     reason: 'logged in, but no editor or session is pointing at it',
-    nextAction: `Point an editor at it with \`baton use ${account.id}\`, or remove it.`,
+    nextAction: `Point an editor at it with \`baton use ${account.id}\`, or remove it.${unattributedNote(unattributed)}`,
   };
 }
 
@@ -199,12 +224,24 @@ export function classifyAccounts(
   return accounts.map((a) => classifyAccount(provider, a, sessions, { ...opts, hosts, limits }));
 }
 
-function newestLimit(
+/**
+ * Split recent limit events into the ones this account owns and the ones
+ * nobody can be shown to own.
+ *
+ * A limit event lives in the pooled history, which never recorded which
+ * account produced it. Blaming whichever account happens to be bound right now
+ * is wrong the moment the user has switched since — it reported the account
+ * they moved TO as spent, and the one that actually ran out as ready, which is
+ * exactly backwards. Each event goes through attribution instead, and an event
+ * that cannot be resolved is counted rather than pinned on someone.
+ */
+function limitsFor(
   provider: Provider,
+  account: Account,
   supplied: LimitEvent[] | undefined,
   now: number,
   windowMinutes: number,
-): LimitEvent | null {
+): { mine: LimitEvent | null; unattributed: number } {
   const events = supplied ?? findLimitEvents([provider], { sinceMinutes: windowMinutes });
   const cutoff = now - windowMinutes * 60_000;
   const fresh = events
@@ -214,7 +251,15 @@ function newestLimit(
       return Number.isNaN(t) ? false : t >= cutoff;
     })
     .sort((a, b) => b.at.localeCompare(a.at));
-  return fresh[0] ?? null;
+
+  let unattributed = 0;
+  const mine: LimitEvent[] = [];
+  for (const e of fresh) {
+    const who = resolveAttribution(e.sessionId, { cwd: e.cwd, at: e.at });
+    if (!who) unattributed++;
+    else if (who.accountId === account.id) mine.push(e);
+  }
+  return { mine: mine[0] ?? null, unattributed };
 }
 
 function describeAge(iso: string, now: number): string {

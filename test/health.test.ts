@@ -193,9 +193,16 @@ test('a spent account outside the window is no longer spent', (t) => {
   });
 
   assert.notEqual(health!.status, 'spent');
-  assert.equal(health!.lastLimitAt.known, true, 'the event is still reported, it just no longer bites');
   assert.equal(health!.spent.known, false);
-  if (!health!.spent.known) assert.equal(health!.spent.reason, 'not-applicable');
+  // The event predates anything observed of this session, and a transcript can
+  // be resumed under a different account — so it is not reported as this
+  // account's last limit either. Unknown, rather than assumed.
+  assert.equal(
+    health!.lastLimitAt.known,
+    false,
+    'an event from before the session was observed is not credited to it',
+  );
+  assert.ok(health!.unattributedLimits >= 1, 'it is still surfaced, just not pinned on anyone');
 });
 
 test('a limit nobody can be blamed for leaves every account unknown rather than ok', () => {

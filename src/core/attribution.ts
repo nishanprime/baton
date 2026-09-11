@@ -425,12 +425,27 @@ export function resolveAttribution(
 ): Attribution | null {
   const data = readFile();
 
+  const at = hint.at ? Date.parse(hint.at) : Number.NaN;
+
   if (sessionId) {
     const exact = data.records[`sid:${sessionId}`];
-    if (exact) return { accountId: exact.accountId, confidence: 'exact', recordedAt: exact.firstSeen };
+    // A session id is not a stable key for an account: a conversation can be
+    // resumed later under a different one, and the record only describes the
+    // window it was actually observed in. Answering from the id alone reported
+    // a limit hit hours earlier as belonging to whichever account happens to
+    // hold that transcript now — which is how the account the user switched TO
+    // got shown as spent, and the one that ran out as ready.
+    if (exact) {
+      const withinObserved =
+        !Number.isFinite(at) ||
+        (Date.parse(exact.firstSeen) - MATCH_GRACE_MS <= at &&
+          at <= Date.parse(exact.lastSeen) + MATCH_GRACE_MS);
+      if (withinObserved) {
+        return { accountId: exact.accountId, confidence: 'exact', recordedAt: exact.firstSeen };
+      }
+    }
   }
 
-  const at = hint.at ? Date.parse(hint.at) : Number.NaN;
   if (!hint.cwd || !Number.isFinite(at)) return null;
 
   // A transcript records the logical cwd the session was started with; lsof

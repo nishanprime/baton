@@ -11,6 +11,7 @@ import {
   renameAccount,
   LifecycleError,
 } from '../src/core/lifecycle.ts';
+import { clearAttributionCache } from '../src/core/attribution.ts';
 import { linkAccount } from '../src/core/share.ts';
 import { sharedStore } from '../src/core/paths.ts';
 import { claudeProvider } from '../src/providers/claude/index.ts';
@@ -153,7 +154,7 @@ test('a live session alone makes an account active', () => {
   assert.deepEqual(status.liveSessions.map((s) => s.pid), [4242]);
 });
 
-test('a recent limit event makes a bound account spent, and says when it resets', () => {
+test('a limit event is only spent for the account attribution ties it to', () => {
   const a = account('.claude-work', { email: 'work@example.com' });
   const now = Date.parse('2026-09-11T22:00:00.000Z');
   const opts = {
@@ -162,11 +163,26 @@ test('a recent limit event makes a bound account spent, and says when it resets'
     now,
   };
 
-  const status = classifyAccount(claudeProvider, a, [], opts);
-  assert.equal(status.state, 'spent');
-  assert.match(status.reason, /10 min ago/);
-  assert.match(status.reason, /4:10am/);
-  assert.equal(status.limit?.sessionId, 'abc');
+  // Nothing recorded whose session 'abc' was, so being the bound account is not
+  // evidence. Blaming the bound account is precisely the bug this replaced: it
+  // reported the account the user had just switched TO as spent, and the one
+  // that actually ran out as ready.
+  const unknown = classifyAccount(claudeProvider, a, [], opts);
+  assert.equal(unknown.state, 'active', 'bound, but not shown to be the one that ran out');
+  assert.equal(unknown.unattributedLimits, 1, 'the event is surfaced, just not pinned on anyone');
+
+  // With an observation covering it, the same event does make the account spent.
+  writeAttribution({
+    sessionId: 'abc',
+    accountId: 'work',
+    firstSeen: '2026-09-11T21:00:00.000Z',
+    lastSeen: '2026-09-11T21:55:00.000Z',
+  });
+  const attributed = classifyAccount(claudeProvider, a, [], opts);
+  assert.equal(attributed.state, 'spent');
+  assert.match(attributed.reason, /10 min ago/);
+  assert.match(attributed.reason, /4:10am/);
+  assert.equal(attributed.limit?.sessionId, 'abc');
 
   // Stale events do not keep an account marked spent forever.
   const old = classifyAccount(claudeProvider, a, [], {
@@ -174,14 +190,40 @@ test('a recent limit event makes a bound account spent, and says when it resets'
     limits: [limitEvent('2026-09-11T10:00:00.000Z')],
   });
   assert.equal(old.state, 'active');
-
-  // Pooled history does not record which account wrote an event, so an account
-  // nothing points at is reported idle rather than credited with someone's limit.
-  const unbound = classifyAccount(claudeProvider, a, [], { ...opts, hosts: [] });
-  assert.equal(unbound.state, 'idle');
 });
 
-// ---------------------------------------------------------------- re-auth
+/** Seed the attribution map with one observed window. */
+function writeAttribution(r: {
+  sessionId: string;
+  accountId: string;
+  firstSeen: string;
+  lastSeen: string;
+}): void {
+  const dir = process.env.BATON_HOME!;
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, 'attribution.json'),
+    JSON.stringify({
+      version: 1,
+      since: r.firstSeen,
+      records: {
+        [`sid:${r.sessionId}`]: {
+          providerId: 'claude',
+          accountId: r.accountId,
+          sessionId: r.sessionId,
+          cwd: null,
+          pid: 1,
+          startedAt: r.firstSeen,
+          editor: null,
+          firstSeen: r.firstSeen,
+          lastSeen: r.lastSeen,
+        },
+      },
+    }),
+    'utf8',
+  );
+  clearAttributionCache();
+}
 
 test('the login command survives a directory name with a space in it', () => {
   const a = account('.claude-testing new', { email: 'x@example.com' });

@@ -771,8 +771,7 @@ function planHtml(plan, history) {
       <div class="plan">${plural(plan.unlinkedShared.length, 'pooled item')} detached from the shared store first.
         The store keeps its copy at ${esc(tilde(plan.sharedStore))}.</div>` : ''}
     ${plan.rebind?.length ? `
-      <div class="plan">${esc(plan.rebind.map((h) => h.label).join(', '))} point here and will need another account afterwards.</div>` : ''}
-    ${history === 'delete' ? '' : ''}`;
+      <div class="plan">${esc(plan.rebind.map((h) => h.label).join(', '))} point here and will need another account afterwards.</div>` : ''}`;
 }
 
 const historyChoiceHtml = () => `
@@ -1784,6 +1783,9 @@ function subtitle() {
 let lastRendered = null;
 
 function render() {
+  // The ⋯ menu is anchored to a card this is about to replace, so leaving it
+  // open would strand it over the new layout with focus nowhere.
+  closeMenu(false);
   $('sub').textContent = subtitle();
   for (const b of qsa('nav button')) {
     b.setAttribute('aria-selected', String(b.dataset.tab === state.tab));
@@ -1836,6 +1838,10 @@ $('reload').onclick = () => busyWhile($('reload'), async () => {
 // open — the message that has been sitting there since the user last asked a
 // question they have finished with.
 document.addEventListener('keydown', (e) => {
+  // A dialog and a menu both close on Escape from a capture handler that calls
+  // preventDefault. Without this the same keypress would close one of those and
+  // silently swallow a message the user had not finished reading.
+  if (e.defaultPrevented) return;
   if (e.key !== 'Escape' || liveMenu || $('scrim').classList.contains('open')) return;
   const last = messages[messages.length - 1];
   if (last) {
