@@ -10,6 +10,12 @@ const argv = process.argv.slice(2);
 const flags = new Set(argv.filter((a) => a.startsWith('--')));
 const positional = argv.filter((a) => !a.startsWith('--'));
 const dryRun = flags.has('--dry-run');
+const asJson = flags.has('--json');
+
+/** Machine-readable output for the GUI, which drives this CLI. */
+function emit(payload: unknown): void {
+  console.log(JSON.stringify(payload, null, 2));
+}
 
 const flagValue = (name: string): string | undefined => {
   const i = argv.indexOf(name);
@@ -44,6 +50,30 @@ function describeAccount(a: Account, hosts: Host[]): string {
 }
 
 function cmdStatus(): void {
+  if (asJson) {
+    emit({
+      appHome: appHome(),
+      providers: PROVIDERS.map((provider) => {
+        const accounts = provider.discoverAccounts();
+        const hosts = provider.discoverHosts();
+        return {
+          id: provider.id,
+          label: provider.label,
+          envVar: provider.envVar,
+          sharedStore: sharedStore(provider.id),
+          accounts: accounts.map((a) => ({
+            ...a,
+            usedBy: hosts.filter((h) => h.configDir === a.configDir).map((h) => h.id),
+          })),
+          hosts: hosts.map((h) => ({
+            ...h,
+            accountId: accounts.find((a) => a.configDir === h.configDir)?.id ?? null,
+          })),
+        };
+      }),
+    });
+    return;
+  }
   console.log(`${bold('Baton')} ${dim(`· state in ${appHome()}`)}\n`);
   for (const provider of PROVIDERS) {
     const accounts = provider.discoverAccounts();
@@ -83,10 +113,30 @@ function cmdUse(): void {
       ? hosts.filter((h) => h.id === hostId)
       : hosts.filter((h) => h.configDir);
 
-  if (!targets.length) throw new Error(`No matching editor. Known: ${hosts.map((h) => h.id).join(', ')}`);
+  if (!targets.length) {
+    throw new Error(`No matching editor. Known: ${hosts.map((h) => h.id).join(', ')}`);
+  }
 
-  for (const host of targets) {
-    const r = switchHost(provider, host, to, accounts, { dryRun });
+  const results = targets.map((host) => switchHost(provider, host, to, accounts, { dryRun }));
+
+  if (asJson) {
+    emit({
+      ok: true,
+      account: { id: to.id, email: to.email ?? null, configDir: to.configDir },
+      switched: results.map((r) => ({
+        host: r.host.id,
+        label: r.host.label,
+        from: r.from?.id ?? null,
+        configFile: r.host.configFile,
+      })),
+      dryRun,
+      note: dryRun ? null : 'Reload the editor window, then `claude --resume`.',
+    });
+    return;
+  }
+
+  for (const r of results) {
+    const host = r.host;
     const prefix = dryRun ? yellow('[dry-run]') : green('✓');
     console.log(`${prefix} ${host.label} → ${bold(to.id)}${to.email ? dim(` (${to.email})`) : ''}`);
     if (r.from) console.log(dim(`    carried project state forward from ${r.from.id}`));
@@ -180,6 +230,7 @@ Options
   --all            every editor (use) / every account (link)
   --provider <id>  ${PROVIDERS.map((p) => p.id).join(', ')}
   --dry-run        print what would change, write nothing
+  --json           machine-readable output (used by the GUI)
 `;
 
 async function main(): Promise<void> {
@@ -200,6 +251,7 @@ async function main(): Promise<void> {
 }
 
 main().catch((err: Error) => {
-  console.error(`\x1b[31m${err.message}\x1b[0m`);
+  if (asJson) emit({ ok: false, error: err.message });
+  else console.error(`\x1b[31m${err.message}\x1b[0m`);
   process.exit(1);
 });

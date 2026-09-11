@@ -8,7 +8,10 @@
   },
   "scripts": {
     "cli": "node src/cli.ts",
-    "test": "node --test \"test/**/*.test.ts\""
+    "test": "node --test \"test/**/*.test.ts\"",
+    "build:cli": "esbuild src/cli.ts --bundle --platform=node --format=esm --target=node22 --main-fields=module,main --outfile=dist/cli.mjs",
+    "gui:dev": "pnpm build:cli && cd gui/src-tauri && cargo tauri dev",
+    "gui:build": "pnpm build:cli && cd gui/src-tauri && cargo tauri build"
   },
   "dependencies": {
     "jsonc-parser": "^3.3.1"
@@ -19,6 +22,7 @@
   "license": "MIT",
   "devDependencies": {
     "@types/node": "^22.20.2",
+    "esbuild": "^0.28.2",
     "typescript": "^7.0.2"
   }
 }

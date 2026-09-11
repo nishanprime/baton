@@ -25,31 +25,59 @@ So switching accounts is only ever a change of identity. Your work stays exactly
 
 **Baton never reads or writes your credentials.** On macOS those live in the system Keychain, keyed per config directory; elsewhere they're a file inside it. Either way they travel with the directory on their own — Baton just changes which directory is selected.
 
-## Install
+## Quick start
 
-Requires Node 22.18+ (for native TypeScript execution).
+**Requires Node 22.18+** (for native TypeScript execution). Check with `node --version`.
 
 ```bash
 git clone https://github.com/nishanprime/baton.git
-cd baton && pnpm install
-npm link          # optional, puts `baton` on your PATH
+cd baton
+pnpm install
+node src/cli.ts setup
 ```
 
-## Use
+`setup` is a guided walkthrough. It:
+
+1. Finds your accounts and editors, and shows what points where.
+2. Offers to create a second account if you only have one, and tells you the exact command to log into it.
+3. **Previews** the history pooling and asks before moving anything.
+4. Lets you pick a default account per editor.
+
+Nothing is written until you confirm, and everything it touches is backed up to `~/.baton/backups/<timestamp>/` first.
+
+Optionally put it on your PATH:
 
 ```bash
-baton status                  # accounts, editors, and what points where
-baton link --all              # one-time: pool all history into the shared store
-baton use work --host cursor
-baton use work --all        # every editor at once
-baton doctor                  # find half-applied or inconsistent bindings
+npm link      # then just `baton setup`
 ```
 
-Every command that writes accepts `--dry-run`. **Run `baton link --all --dry-run` first** — it prints exactly what would move, and flags any single-value file (like `CLAUDE.md`) where one copy has to win.
+## Everyday use
 
-Everything Baton touches is backed up to `~/.baton/backups/<timestamp>/` beforehand, and `baton unlink <account>` turns the symlinks back into real files if you ever want out.
+```bash
+baton status                   # accounts, editors, and what points where
+baton use work --host cursor # point one editor at an account
+baton use work --all         # every editor at once
+baton add work                 # create a new account directory to log into
+baton doctor                   # find half-applied or inconsistent bindings
+baton unlink <account>         # turn the symlinks back into real files
+```
+
+Every writing command takes `--dry-run`, which prints exactly what would change and writes nothing. `--json` gives machine-readable output — it is how the GUI drives the CLI.
 
 After a switch, **reload the editor window**, then `claude --resume`. The running process holds its token in memory, so it needs the reload — but your conversations are all still there.
+
+## Menu bar app
+
+A Tauri menu bar app wraps the same CLI: switch accounts from the tray, or open a window to assign accounts per editor.
+
+```bash
+pnpm gui:dev      # run it
+pnpm gui:build    # produce Baton.app + a .dmg
+```
+
+Building it needs [Rust](https://rustup.rs). The app still shells out to Node, so Node stays a requirement — the CLI is bundled into the app as a single file, so there is nothing else to install.
+
+> On macOS a GUI app launched from Finder gets a minimal `PATH` and cannot see Homebrew or nvm installs. Baton asks your login shell where Node is. If that ever fails, set `BATON_NODE` to the absolute path.
 
 ## Supported
 
@@ -67,9 +95,10 @@ The `SharePolicy` split is **default-deny**: anything not explicitly listed as s
 
 ## Roadmap
 
-- Menu bar GUI (Tauri) — switch without a terminal
-- Auto-detect limit exhaustion from `policy-limits.json` and prompt to switch
+- Auto-detect limit exhaustion from `policy-limits.json` and offer to switch
+- Bundle Node as a Tauri sidecar so the app has no external requirement
 - Per-project account pinning
+- Signed and notarised release builds
 
 ## Note
 
