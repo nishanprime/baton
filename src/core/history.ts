@@ -189,6 +189,8 @@ export interface HistoryFilter {
   limit?: number;
   /** Rows to skip, for paging. */
   offset?: number;
+  /** Also return filter options built from the unfiltered set. */
+  withFacets?: boolean;
 }
 
 export interface HistoryPage {
@@ -202,6 +204,19 @@ export interface HistoryPage {
   hasMore: boolean;
   /** Files re-parsed this call; the rest came from cache. */
   reparsed: number;
+  /**
+   * Filter options, computed from everything in the store rather than the
+   * current page, so the controls stay stable while paging or narrowing.
+   * Present only when requested — computing it is free here but it is noise
+   * for callers that just want rows.
+   */
+  facets?: HistoryFacets;
+}
+
+export interface HistoryFacets {
+  projects: { value: string; count: number }[];
+  launchedFrom: { value: string; count: number }[];
+  providers: { value: string; count: number }[];
 }
 
 // --------------------------------------------------------------- cache
@@ -306,6 +321,8 @@ export function listConversations(
   if (reparsed || Object.keys(fresh).length !== Object.keys(cache).length) saveCache(fresh);
 
   const totalUnfiltered = out.length;
+  // Built before filtering, so the controls describe the whole store.
+  const facets = filter.withFacets ? historyFacets(out) : undefined;
   let result = out.sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''));
 
   if (filter.project) result = result.filter((c) => c.project === filter.project);
@@ -330,6 +347,7 @@ export function listConversations(
     limit,
     hasMore: limit !== null && offset + page.length < total,
     reparsed,
+    ...(facets ? { facets } : {}),
   };
 }
 

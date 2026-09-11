@@ -279,16 +279,15 @@ function cmdHistory(): void {
     search: flagValue('--search'),
     limit: limitRaw ? Number(limitRaw) : 50,
     offset: offsetRaw ? Number(offsetRaw) : 0,
+    withFacets: asJson,
   });
 
   const settings = loadSettings();
   const maskProject = settings.display.hideProjects;
 
   if (asJson) {
-    // Facets describe the whole store, so the filter controls stay stable as
-    // the user pages through or narrows a search.
-    const facetSource = listConversations(providers, { limit: undefined });
-    const masker = makeProjectMasker(facetSource.conversations.map((c) => c.project));
+    const facets = page.facets ?? { projects: [], launchedFrom: [], providers: [] };
+    const masker = makeProjectMasker(facets.projects.map((f) => f.value));
     const decorate = (c: (typeof page.conversations)[number]) => ({
       ...c,
       displayProject: maskProject ? masker(c.project) : c.project,
@@ -304,7 +303,7 @@ function cmdHistory(): void {
       limit: page.limit,
       hasMore: page.hasMore,
       reparsed: page.reparsed,
-      facets: historyFacets(facetSource.conversations),
+      facets,
       conversations: page.conversations.map(decorate),
     });
   }

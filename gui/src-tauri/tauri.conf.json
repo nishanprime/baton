@@ -4,7 +4,9 @@
   "version": "0.1.0",
   "identifier": "dev.nishanprime.baton",
   "build": {
-    "frontendDist": "../ui"
+    "frontendDist": "../ui",
+    "beforeBuildCommand": "cd ../.. && pnpm build:cli",
+    "beforeDevCommand": "cd ../.. && pnpm build:cli"
   },
   "app": {
     "windows": [
