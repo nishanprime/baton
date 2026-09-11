@@ -1,0 +1,24 @@
+{
+  "name": "baton",
+  "version": "0.1.0",
+  "description": "Switch between multiple AI coding accounts across editors, with one shared conversation history.",
+  "type": "module",
+  "bin": {
+    "baton": "./src/cli.ts"
+  },
+  "scripts": {
+    "cli": "node src/cli.ts",
+    "test": "node --test \"test/**/*.test.ts\""
+  },
+  "dependencies": {
+    "jsonc-parser": "^3.3.1"
+  },
+  "engines": {
+    "node": ">=22.18"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^22.20.2",
+    "typescript": "^7.0.2"
+  }
+}
