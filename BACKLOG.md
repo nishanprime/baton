@@ -178,9 +178,11 @@ Properties of the data, not missing effort. State them in the UI.
   which makes it a useful test fixture, an argument for keeping one of them).
 - Both editors are on `work`, which is currently **spent**: it hit its limit
   and reports a reset time.
-- Backups: 14 snapshots, 258MB, **none with a manifest** — all predate the
-  retention work, so they list as degraded and cannot be restored path-by-path.
-  Nothing is over budget, so nothing prunes them automatically.
+- Backups: 18 snapshots, 258MB, of which **16 have no manifest** — they predate
+  the retention work, so they list as degraded and cannot be restored
+  path-by-path. The two labelled `switch:work` are the new shape: one
+  directory per operation, every entry in it, restorable. Nothing is over
+  budget, so nothing prunes the old ones automatically.
 - Nine transcripts were lost and restored during the pooling fix (`6e17b7e`).
   The pre-Baton backup that made that recovery possible was in a session
   scratchpad; if a durable copy has not been made yet, make one.

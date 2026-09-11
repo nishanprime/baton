@@ -513,6 +513,8 @@ function cmdAccounts(): void {
           ...st,
           displayName: accountLabel(st.accountId, settings),
           displayEmail: accountEmail(st.email, settings),
+          // Masked for screen sharing, same as status emits.
+          displayDir: maskPath(st.configDir, settings),
           hasAlias: st.accountId in settings.display.aliases,
           isDefault: a.isDefault,
           reauth: reauthCommand(provider, a),
