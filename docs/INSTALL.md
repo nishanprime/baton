@@ -17,17 +17,19 @@ Needs [Node 22.18+](https://nodejs.org). The GUI additionally needs [Rust](https
 ```bash
 git clone https://github.com/nishanprime/baton.git
 cd baton
-pnpm install
-
-pnpm setup     # guided walkthrough — previews everything before writing
-pnpm build     # optional: builds Baton.app (needs Rust)
-pnpm dev       # optional: run the app with live reload
+pnpm start
 ```
+
+That is the whole thing. `pnpm start` checks your Node version, installs
+dependencies, and builds and opens the app. The app needs Rust, which it offers to
+install — say no and you get a working command line instead of an error, and can
+re-run it later to add the app. `pnpm start --cli-only` skips the question.
 
 Every command:
 
 | Command | Does |
 |---|---|
+| `pnpm start` | Check prerequisites, install, build, open the app |
 | `pnpm setup` | The guided walkthrough |
 | `pnpm cli -- <args>` | Run the CLI, e.g. `pnpm cli -- accounts` |
 | `pnpm test` | The test suite |

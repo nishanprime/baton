@@ -7,6 +7,7 @@
     "baton": "./src/cli.ts"
   },
   "scripts": {
+    "start": "bash scripts/start.sh",
     "setup": "node src/cli.ts setup",
     "cli": "node src/cli.ts",
     "dev": "pnpm gui:dev",
