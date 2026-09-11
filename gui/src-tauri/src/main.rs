@@ -574,6 +574,14 @@ fn backups(app: AppHandle) -> Result<Value, String> {
     backups_list(app)
 }
 
+/// Record which account a limit belonged to, when Baton could not tell.
+#[tauri::command]
+fn blame_limit(app: AppHandle, account: String) -> Result<Value, String> {
+    let result = run_cli(&app, &["limit", account.as_str()])?;
+    let _ = app.emit("accounts-changed", ());
+    Ok(result)
+}
+
 #[tauri::command]
 fn reveal_path(path: String) -> Result<(), String> {
     open_in_finder(path)
@@ -608,6 +616,7 @@ fn main() {
             usage,
             backups,
             reveal_path,
+            blame_limit,
             open_in_finder
         ])
         .setup(|app| {

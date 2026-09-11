@@ -228,9 +228,13 @@ code { background:var(--card); padding:1px 5px; border-radius:4px; font-size:11p
 .linkbtn:hover { color: var(--fg); }
 
 
-/* An account that cannot be cleared of a recent limit. Amber rather than the
-   green of Ready: the point is that it is not known to be fine. */
-.pill.uncertain {
-  background: color-mix(in srgb, var(--warn) 18%, transparent);
-  color: var(--warn);
+
+/* One notice for the list, where a per-account pill would have been a claim
+   about an account that Baton cannot actually make. */
+.notice {
+  border: 1px solid color-mix(in srgb, var(--warn) 35%, var(--line));
+  background: color-mix(in srgb, var(--warn) 9%, var(--card));
+  border-radius: 9px; padding: 10px 12px; margin-bottom: 14px; font-size: 12px;
 }
+.notice-detail { color: var(--muted); font-size: 11.5px; }
+.notice-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 8px; }

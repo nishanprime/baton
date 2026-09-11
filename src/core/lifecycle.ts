@@ -28,14 +28,7 @@ export type AccountState =
   /** Logged in, bound to nothing. */
   | 'idle'
   /** Logged in and out of quota for now. */
-  | 'spent'
-  /**
-   * Logged in, and a limit was hit recently that nothing ties to an account —
-   * so this one cannot be ruled out. Distinct from 'idle' on purpose: 'idle'
-   * asserts the account is fine, and that assertion is exactly what was wrong
-   * when the account that had actually run out was shown as ready.
-   */
-  | 'uncertain';
+  | 'spent';
 
 export interface AccountStatus {
   accountId: string;
@@ -194,31 +187,17 @@ export function classifyAccount(
     ...mine.map((s) => `pid ${s.pid}${s.editorHint ? ` (${s.editorHint})` : ''}`),
   ];
 
-  // An unplaceable limit means no account can be called fine. Saying so on
-  // every logged-in account is noisy, but it is true, and it resolves itself
-  // as the event ages out of the window.
-  if (unattributed) {
-    return {
-      ...base,
-      state: 'uncertain',
-      limit: null,
-      unattributedLimits: unattributed,
-      loginCommand: null,
-      reason: isBound
-        ? `in use by ${where.join(', ')}; a recent limit cannot be ruled out`
-        : 'logged in; a recent limit cannot be ruled out',
-      nextAction:
-        `A limit was hit recently and the history it came from does not record which account produced it, so this one cannot be cleared.` +
-        ` If you know it was this account, run \`baton limit ${account.id}\`; if it was not, \`baton limit ${account.id} --not\`.`,
-    };
-  }
-
+  // An unplaceable limit is deliberately NOT a state on any account. A pill
+  // describes this account, and "a limit was hit, owner unknown" is a fact
+  // about the history, not about any one account — painting all of them amber
+  // said nothing useful and made every row look broken. It is reported once,
+  // alongside the list, via unattributedLimits.
   if (isBound) {
     return {
       ...base,
       state: 'active',
       limit: null,
-      unattributedLimits: 0,
+      unattributedLimits: unattributed,
       loginCommand: null,
       reason: `in use by ${where.join(', ')}`,
       nextAction: 'Nothing to do — this is the account in use.',
@@ -229,7 +208,7 @@ export function classifyAccount(
     ...base,
     state: 'idle',
     limit: null,
-    unattributedLimits: 0,
+    unattributedLimits: unattributed,
     loginCommand: null,
     reason: 'logged in, but no editor or session is pointing at it',
     nextAction: `Point an editor at it with \`baton use ${account.id}\`, or remove it.`,

@@ -572,6 +572,7 @@ const load = {
   accounts: async () => {
     const res = await call('accounts');
     state.accounts = res.accounts ?? [];
+    state.accountsMeta = res;
     // Health enriches a card; losing it must not blank the tab that lists them.
     try {
       state.health = await call('health');
@@ -657,16 +658,31 @@ async function loadHistory(offset) {
 
 // ---------------------------------------------------------------- account flows
 
-const STATE_PILL = {
-  draft: 'Draft',
-  active: 'Active',
-  idle: 'Ready',
-  spent: 'Limit reached',
-  // Not "Ready". A limit was hit that nothing ties to an account, so calling
-  // this one fine would be an assertion Baton cannot make — which is how the
-  // account that had actually run out came to be shown as ready.
-  uncertain: 'Limit unclear',
-};
+const STATE_PILL = { draft: 'Draft', active: 'Active', idle: 'Ready', spent: 'Limit reached' };
+
+/**
+ * One notice for the whole list when a limit cannot be traced.
+ *
+ * Deliberately not a pill on each account: "a limit was hit, owner unknown" is
+ * a fact about the history, not about any one account. Marking all of them
+ * amber said nothing useful and made every row look broken.
+ */
+function unplacedLimitNotice() {
+  const n = state.accountsMeta?.unattributedLimits ?? 0;
+  if (!n) return '';
+  const names = (state.accounts ?? []).filter((a) => a.state !== 'draft').map((a) => a.accountId);
+  return `
+    <div class="notice">
+      <div><strong>${n} recent limit event${n === 1 ? '' : 's'} could not be traced to an account.</strong></div>
+      <div class="notice-detail">It happened before Baton was watching, and the pooled history does not
+        record which account produced it. Baton will attribute limits from here on.</div>
+      <div class="notice-actions">
+        <span class="notice-detail">If you know whose it was:</span>
+        ${names.map((id) => `<button class="btn sm ghost" data-blame="${esc(id)}">${esc(id)}</button>`).join('')}
+        <button class="btn sm ghost" data-blame="__dismiss">Not sure</button>
+      </div>
+    </div>`;
+}
 
 async function loginFlow(a) {
   const command = a.loginCommand ?? a.reauth?.command;
@@ -1114,6 +1130,7 @@ function viewAccounts() {
 
   return `
     ${viewFirstRun()}
+    ${unplacedLimitNotice()}
     <h2>Accounts <span class="count">${list.length}${drafts ? ` · ${drafts} waiting on a login` : ''}</span></h2>
     ${cards}
     <div class="actions">
@@ -1192,6 +1209,27 @@ async function checkFlow() {
 }
 
 function wireAccounts() {
+  for (const b of document.querySelectorAll('[data-blame]')) {
+    b.onclick = () => guard(async () => {
+      const who = b.dataset.blame;
+      if (who === '__dismiss') {
+        state.accountsMeta = { ...state.accountsMeta, unattributedLimits: 0 };
+        render();
+        return;
+      }
+      const ok = await confirmDialog(
+        `Record the limit as ${who}'s?`,
+        'Baton could not work this out from the history, so it takes your word for it. '
+          + 'That settles the event for every other account too.',
+        { okLabel: 'Yes, it was ' + who },
+      );
+      if (!ok) return;
+      await call('blame_limit', { account: who });
+      say(`Recorded as ${who}'s limit.`);
+      await ensure('accounts', true);
+      render();
+    });
+  }
   const skip = $('skipIntro');
   if (skip) {
     skip.onclick = () => {

@@ -490,7 +490,6 @@ const STATE_LABEL: Record<string, string> = {
   active: 'active',
   idle: 'ready',
   spent: 'limit reached',
-  uncertain: 'limit unclear',
 };
 
 function cmdAccounts(): void {
@@ -509,6 +508,9 @@ function cmdAccounts(): void {
   if (asJson) {
     return emit({
       ok: true,
+      // Reported once for the list: it is a fact about the history, not about
+      // any single account.
+      unattributedLimits: statuses.reduce((n, st) => Math.max(n, st.unattributedLimits), 0),
       accounts: statuses.map((st) => {
         const a = accounts.find((x) => x.id === st.accountId)!;
         return {
@@ -526,6 +528,8 @@ function cmdAccounts(): void {
     });
   }
 
+  const unplaced = statuses.reduce((n, st) => Math.max(n, st.unattributedLimits), 0);
+
   console.log(`${bold('Accounts')}\n`);
   for (const st of statuses) {
     const tag = st.state === 'draft' ? yellow(STATE_LABEL[st.state]!) : dim(STATE_LABEL[st.state]!);
@@ -533,6 +537,14 @@ function cmdAccounts(): void {
     console.log(`    ${dim(st.reason)}`);
     if (st.loginCommand) console.log(`    ${bold(st.loginCommand)}`);
     else console.log(`    ${dim(st.nextAction)}`);
+  }
+
+  if (unplaced) {
+    console.log(
+      `\n${yellow('!')} ${unplaced} recent limit event${unplaced === 1 ? '' : 's'} could not be traced to an account.`,
+    );
+    console.log(dim('  It happened before Baton was watching, and the history does not record whose it was.'));
+    console.log(dim('  If you know: baton limit <account>'));
   }
 }
 

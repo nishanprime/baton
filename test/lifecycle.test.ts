@@ -168,7 +168,7 @@ test('a limit event is only spent for the account attribution ties it to', () =>
   // reported the account the user had just switched TO as spent, and the one
   // that actually ran out as ready.
   const unknown = classifyAccount(claudeProvider, a, [], opts);
-  assert.equal(unknown.state, 'uncertain', 'bound, but not shown to be the one that ran out');
+  assert.equal(unknown.state, 'active', 'bound, but not shown to be the one that ran out');
   assert.equal(unknown.unattributedLimits, 1, 'the event is surfaced, just not pinned on anyone');
 
   // With an observation covering it, the same event does make the account spent.
@@ -479,7 +479,7 @@ test('rename refuses a live session, a name that is already taken, and a bad nam
   assert.ok(fs.existsSync(a.configDir));
 });
 
-test('an unplaceable limit makes every account uncertain, not ready', () => {
+test('an unplaceable limit is reported without changing any account state', () => {
   const a = account('.claude-work', { email: 'work@example.com' });
   const now = Date.parse('2026-09-11T22:00:00.000Z');
   const status = classifyAccount(claudeProvider, a, [], {
@@ -488,10 +488,10 @@ test('an unplaceable limit makes every account uncertain, not ready', () => {
     now,
   });
 
-  // 'idle' would assert the account is fine, which is the claim that was wrong.
-  assert.equal(status.state, 'uncertain');
+  // The count is the signal. Turning the state itself amber marked every
+  // logged-in account at once, which said nothing about any of them.
+  assert.equal(status.state, 'idle');
   assert.equal(status.unattributedLimits, 1);
-  assert.match(status.reason, /cannot be ruled out/);
 });
 
 test('stating whose a limit was settles it for everyone', () => {
@@ -513,7 +513,8 @@ test('ruling an account out clears it without naming a culprit', () => {
   const now = Date.parse('2026-09-11T22:00:00.000Z');
   const opts = { hosts: [], limits: [limitEvent('2026-09-11T21:50:00.000Z')], now };
 
-  assert.equal(classifyAccount(claudeProvider, a, [], opts).state, 'uncertain');
+  assert.equal(classifyAccount(claudeProvider, a, [], opts).unattributedLimits, 1);
   setStatedAttribution('abc', null, { ruleOut: 'work' });
-  assert.equal(classifyAccount(claudeProvider, a, [], opts).state, 'idle');
+  assert.equal(classifyAccount(claudeProvider, a, [], opts).unattributedLimits, 0,
+    'ruling out clears the count for this account');
 });
