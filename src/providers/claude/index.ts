@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { exists, isDir } from '../../core/paths.ts';
+import { exists, isDir, KNOWN_EDITORS, findExtensions } from '../../core/paths.ts';
 import { discoverVsCodeHosts, bindVsCodeHost, type VsCodeBinding } from '../../core/vscode-host.ts';
 import type { Account, Host, Provider, SharePolicy } from '../../core/types.ts';
 
@@ -10,6 +10,7 @@ const ID = 'claude';
 const BINDING: VsCodeBinding = {
   envVar: 'CLAUDE_CONFIG_DIR',
   extensionEnvKey: 'claudeCode.environmentVariables',
+  extensionPrefix: 'anthropic.claude-code',
 };
 
 /**
@@ -128,10 +129,31 @@ function discoverAccounts(home = os.homedir()): Account[] {
     );
 }
 
+/** Is Claude Code actually on this machine, as a CLI or an editor extension? */
+function isInstalled(): { installed: boolean; detail: string } {
+  const onPath = (() => {
+    for (const dir of (process.env.PATH ?? '').split(path.delimiter)) {
+      if (dir && exists(path.join(dir, 'claude'))) return path.join(dir, 'claude');
+    }
+    return null;
+  })();
+  if (onPath) return { installed: true, detail: `CLI at ${onPath}` };
+
+  const viaExtension = KNOWN_EDITORS.flatMap((e) =>
+    findExtensions(e.extDir, 'anthropic.claude-code').map(() => e.label),
+  );
+  if (viaExtension.length) {
+    return { installed: true, detail: `extension in ${[...new Set(viaExtension)].join(', ')}` };
+  }
+  return { installed: false, detail: 'not found on PATH or in any editor' };
+}
+
 export const claudeProvider: Provider = {
   id: ID,
   label: 'Claude Code',
   envVar: BINDING.envVar,
+  processName: 'claude',
+  isInstalled,
   sharePolicy: SHARE_POLICY,
   discoverAccounts,
   discoverHosts: () => discoverVsCodeHosts(ID, BINDING),

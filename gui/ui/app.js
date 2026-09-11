@@ -148,8 +148,8 @@ function wireAccounts() {
 
   $('check').onclick = () => guard(async () => {
     const res = await invoke('doctor');
-    say(res.ok ? 'No problems found.' : res.issues.map((i) => `• ${i.message}`).join('\n'),
-        res.ok ? 'ok' : 'err');
+    say(res.healthy ? 'No problems found.' : res.issues.map((i) => `• ${i.message}`).join('\n'),
+        res.healthy ? 'ok' : 'warn');
   });
 }
 

@@ -19,6 +19,13 @@ export interface Settings {
   };
   /** Account each editor should start on, by host id. */
   defaultAccountByHost: Record<string, string>;
+  /** How things are shown, for screen sharing and screenshots. */
+  display: {
+    /** Account id → display name. Cosmetic only; never changes a config path. */
+    aliases: Record<string, string>;
+    hideEmails: boolean;
+    hideProjects: boolean;
+  };
   /** Print the "reload the window" reminder after a switch. */
   showReloadHint: boolean;
 }
@@ -26,6 +33,7 @@ export interface Settings {
 export const DEFAULTS: Settings = {
   autoSwitch: { enabled: false, mode: 'notify', rotation: [], pollSeconds: 60 },
   defaultAccountByHost: {},
+  display: { aliases: {}, hideEmails: false, hideProjects: false },
   showReloadHint: true,
 };
 
@@ -36,7 +44,18 @@ export const SCHEMA: Record<string, { type: 'boolean' | 'number' | 'string' | 'l
   'autoSwitch.rotation': { type: 'list', help: 'account ids to try in order (comma separated)' },
   'autoSwitch.pollSeconds': { type: 'number', help: 'how often to check, in seconds' },
   'showReloadHint': { type: 'boolean', help: 'show the reload reminder after switching' },
+  'display.hideEmails': { type: 'boolean', help: 'mask account emails in output' },
+  'display.hideProjects': { type: 'boolean', help: 'replace project names with Project A, B, …' },
 };
+
+/** Set or clear a cosmetic display name for an account. */
+export function setAlias(accountId: string, alias: string | null): Settings {
+  const s = loadSettings();
+  if (alias && alias.trim()) s.display.aliases[accountId] = alias.trim();
+  else delete s.display.aliases[accountId];
+  saveSettings(s);
+  return s;
+}
 
 const settingsFile = () => path.join(appHome(), 'settings.json');
 

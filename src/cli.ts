@@ -4,7 +4,8 @@ import { linkAccount, unlinkAccount } from './core/share.ts';
 import { switchHost } from './core/switch.ts';
 import { appHome, sharedStore } from './core/paths.ts';
 import { runSetup, createAccount, loginHint } from './core/setup.ts';
-import { loadSettings, setSetting, settingsPath, SCHEMA } from './core/settings.ts';
+import { loadSettings, setSetting, setAlias, settingsPath, SCHEMA } from './core/settings.ts';
+import { accountLabel, accountEmail, makeProjectMasker, maskPath, maskPathsInText } from './core/display.ts';
 import { listConversations, historyFacets } from './core/history.ts';
 import { findLimitEvents } from './core/limits.ts';
 import { loadState, saveState } from './core/state.ts';
@@ -66,6 +67,12 @@ function cmdStatus(): void {
         sharedStore: sharedStore(provider.id),
         accounts: accounts.map((a) => ({
           ...a,
+          // displayName/displayEmail are what a UI should render; id and email
+          // stay untouched so nothing keys off a cosmetic value.
+          displayName: accountLabel(a.id, settings),
+          displayEmail: accountEmail(a.email, settings),
+          hasAlias: a.id in settings.display.aliases,
+          displayDir: maskPath(a.configDir, settings),
           usedBy: hosts.filter((h) => h.configDir === a.configDir).map((h) => h.id),
         })),
         hosts: hosts.map((h) => ({
@@ -85,10 +92,10 @@ function cmdStatus(): void {
     for (const a of accounts) {
       const users = hosts.filter((h) => h.configDir === a.configDir).map((h) => h.label);
       console.log(
-        `  ${bold(a.id.padEnd(16))}${dim(a.email ?? '(not logged in)')}` +
+        `  ${bold(accountLabel(a.id, settings).padEnd(16))}${dim(accountEmail(a.email, settings))}` +
           (users.length ? green(`  ← ${users.join(', ')}`) : ''),
       );
-      console.log(`    ${dim(a.configDir)}`);
+      console.log(`    ${dim(maskPath(a.configDir, settings))}`);
     }
     console.log(`\n ${bold('Editors')}`);
     if (!hosts.length) console.log(dim('  none found'));
@@ -265,31 +272,78 @@ function cmdHistory(): void {
   const providers = providerFlag ? [getProvider(providerFlag)] : PROVIDERS;
   const limitRaw = flagValue('--limit');
 
-  const all = listConversations(providers);
-  const filtered = listConversations(providers, {
+  const offsetRaw = flagValue('--offset');
+  const page = listConversations(providers, {
     project: flagValue('--project'),
     launchedFrom: flagValue('--from'),
     search: flagValue('--search'),
-    limit: limitRaw ? Number(limitRaw) : undefined,
+    limit: limitRaw ? Number(limitRaw) : 50,
+    offset: offsetRaw ? Number(offsetRaw) : 0,
   });
 
+  const settings = loadSettings();
+  const maskProject = settings.display.hideProjects;
+
   if (asJson) {
+    // Facets describe the whole store, so the filter controls stay stable as
+    // the user pages through or narrows a search.
+    const facetSource = listConversations(providers, { limit: undefined });
+    const masker = makeProjectMasker(facetSource.conversations.map((c) => c.project));
+    const decorate = (c: (typeof page.conversations)[number]) => ({
+      ...c,
+      displayProject: maskProject ? masker(c.project) : c.project,
+      displayTitle: maskPathsInText(c.title, settings),
+      displayCwd: maskPath(c.cwd, settings),
+    });
     return emit({
       ok: true,
-      total: all.length,
-      shown: filtered.length,
-      facets: historyFacets(all),
-      conversations: filtered,
+      total: page.total,
+      totalUnfiltered: page.totalUnfiltered,
+      shown: page.conversations.length,
+      offset: page.offset,
+      limit: page.limit,
+      hasMore: page.hasMore,
+      reparsed: page.reparsed,
+      facets: historyFacets(facetSource.conversations),
+      conversations: page.conversations.map(decorate),
     });
   }
 
-  console.log(`${bold('Conversations')} ${dim(`${filtered.length} of ${all.length}`)}\n`);
-  for (const c of filtered) {
+  const cliMasker = makeProjectMasker(page.conversations.map((c) => c.project));
+  console.log(
+    `${bold('Conversations')} ${dim(`${page.offset + 1}-${page.offset + page.conversations.length} of ${page.total}`)}\n`,
+  );
+  for (const c of page.conversations) {
     const when = c.updatedAt ? c.updatedAt.slice(0, 16).replace('T', ' ') : '';
-    console.log(`  ${dim(when)}  ${bold(c.project.padEnd(18))} ${c.title}`);
-    console.log(`  ${dim(`${' '.repeat(16)}  ${c.messages} msgs · ${c.sessionId}`)}`);
+    const proj = maskProject ? cliMasker(c.project) : c.project;
+    console.log(`  ${dim(when)}  ${bold(proj.padEnd(18))} ${maskPathsInText(c.title, settings)}`);
+    const size = `${(c.sizeBytes / 1048576).toFixed(1)}MB`;
+    console.log(`  ${dim(`${' '.repeat(16)}  ${c.messages ?? '~'} msgs · ${size} · ${c.sessionId}`)}`);
   }
-  if (!filtered.length) console.log(dim('  nothing matched'));
+  if (!page.conversations.length) console.log(dim('  nothing matched'));
+  if (page.hasMore) {
+    console.log(dim(`\n  more: baton history --offset ${page.offset + page.conversations.length}`));
+  }
+}
+
+// ---------------------------------------------------------------- alias
+
+function cmdAlias(): void {
+  const [id, ...rest] = positional.slice(1);
+  if (!id) throw new Error('Usage: baton alias <account> <display name>   (empty name clears it)');
+
+  const provider = resolveProvider();
+  const account = findAccount(provider.discoverAccounts(), id);
+  const alias = rest.join(' ').trim();
+  const next = setAlias(account.id, alias || null);
+
+  if (asJson) return emit({ ok: true, account: account.id, alias: alias || null, settings: next });
+  console.log(
+    alias
+      ? `${green('✓')} ${account.id} now shows as ${bold(alias)}`
+      : `${green('✓')} cleared the display name for ${bold(account.id)}`,
+  );
+  console.log(dim('Cosmetic only — the config directory and env var are unchanged.'));
 }
 
 // ---------------------------------------------------------------- autoswitch
@@ -392,7 +446,9 @@ function cmdDoctor(): void {
       issues.push({ level: 'warn', message: `${a.id}: no account identity found — may need \`claude /login\`.` });
     }
   }
-  if (asJson) return emit({ ok: issues.length === 0, issues });
+  // ok reports whether the check ran; healthy reports what it found. Collapsing
+  // the two made a successful check that found problems look like a failure.
+  if (asJson) return emit({ ok: true, healthy: issues.length === 0, issues });
   for (const i of issues) {
     console.log(yellow(`⚠ ${i.message}`));
     if (i.fix) console.log(dim(`  Fix: ${i.fix}`));
@@ -410,8 +466,9 @@ const HELP = `${bold('baton')} — switch AI coding accounts across editors, kee
   baton use <account> [opts]      point an editor at an account
   baton link [account|--all]      share history across accounts (run once)
   baton unlink <account>          restore an account to standalone files
+  baton alias <account> [name]    set a display name (screenshots); empty clears
   baton settings [set <k> <v>]    view or change preferences
-  baton history [--search x]      browse pooled conversations
+  baton history [--offset n]      browse pooled conversations (50 per page)
   baton autoswitch                check for a spent account and act on it
   baton doctor                    find half-applied or inconsistent bindings
 
@@ -434,6 +491,7 @@ async function main(): Promise<void> {
     case 'settings': case 'config': cmdSettings(); break;
     case 'history': cmdHistory(); break;
     case 'autoswitch': cmdAutoswitch(); break;
+    case 'alias': cmdAlias(); break;
     case 'doctor': cmdDoctor(); break;
     case 'help': console.log(HELP); break;
     default:

@@ -17,16 +17,32 @@ export function editorConfigRoot(): string {
   }
 }
 
-/** Editors known to ship provider extensions that honour a config-dir env var. */
+/**
+ * Editors known to ship provider extensions that honour a config-dir env var.
+ *
+ * `dirNames` locate User/settings.json under the config root; `extDir` is the
+ * separate home-relative folder the editor installs extensions into, which is
+ * how we tell whether a provider's extension is actually present.
+ */
 export const KNOWN_EDITORS = [
-  { id: 'vscode', label: 'VS Code', dirNames: ['Code'] },
-  { id: 'vscode-insiders', label: 'VS Code Insiders', dirNames: ['Code - Insiders'] },
-  { id: 'cursor', label: 'Cursor', dirNames: ['Cursor'] },
-  { id: 'antigravity', label: 'Antigravity', dirNames: ['Antigravity IDE', 'Antigravity'] },
-  { id: 'windsurf', label: 'Windsurf', dirNames: ['Windsurf'] },
-  { id: 'vscodium', label: 'VSCodium', dirNames: ['VSCodium'] },
-  { id: 'trae', label: 'Trae', dirNames: ['Trae'] },
+  { id: 'vscode', label: 'VS Code', dirNames: ['Code'], extDir: '.vscode/extensions' },
+  { id: 'vscode-insiders', label: 'VS Code Insiders', dirNames: ['Code - Insiders'], extDir: '.vscode-insiders/extensions' },
+  { id: 'cursor', label: 'Cursor', dirNames: ['Cursor'], extDir: '.cursor/extensions' },
+  { id: 'antigravity', label: 'Antigravity', dirNames: ['Antigravity IDE', 'Antigravity'], extDir: '.antigravity-ide/extensions' },
+  { id: 'windsurf', label: 'Windsurf', dirNames: ['Windsurf'], extDir: '.windsurf/extensions' },
+  { id: 'vscodium', label: 'VSCodium', dirNames: ['VSCodium'], extDir: '.vscode-oss/extensions' },
+  { id: 'trae', label: 'Trae', dirNames: ['Trae'], extDir: '.trae/extensions' },
 ] as const;
+
+/** Extension folders matching a prefix, e.g. "anthropic.claude-code". */
+export function findExtensions(extDir: string, prefix: string): string[] {
+  const full = path.join(os.homedir(), extDir);
+  try {
+    return fs.readdirSync(full).filter((d) => d.startsWith(prefix));
+  } catch {
+    return [];
+  }
+}
 
 /** Baton's own state: registry, shared history store, and safety backups. */
 export function appHome(): string {

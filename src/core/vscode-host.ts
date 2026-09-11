@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { modify, applyEdits, type FormattingOptions } from 'jsonc-parser';
-import { KNOWN_EDITORS, editorConfigRoot, exists, backupFile } from './paths.ts';
+import { KNOWN_EDITORS, editorConfigRoot, exists, backupFile, findExtensions } from './paths.ts';
 import { readJsonc, readText } from './jsonc.ts';
 import type { Host } from './types.ts';
 
@@ -18,6 +18,8 @@ export interface VsCodeBinding {
   envVar: string;
   /** Extension setting holding an array of {name, value}, e.g. claudeCode.environmentVariables. */
   extensionEnvKey: string;
+  /** Folder prefix of the provider's extension, e.g. "anthropic.claude-code". */
+  extensionPrefix?: string;
 }
 
 const TERMINAL_ENV_KEY: Record<string, string> = {
@@ -70,6 +72,10 @@ export function discoverVsCodeHosts(providerId: string, b: VsCodeBinding): Host[
       const ext = fromExtensionKey(settings, b);
       const term = fromTerminalKey(settings, b);
 
+      const installed = b.extensionPrefix
+        ? findExtensions(def.extDir, b.extensionPrefix)
+        : [];
+
       out.push({
         id: def.id,
         label: def.label,
@@ -77,6 +83,9 @@ export function discoverVsCodeHosts(providerId: string, b: VsCodeBinding): Host[
         configDir: ext ?? term,
         inconsistent: ext !== undefined && term !== undefined && ext !== term,
         providerId,
+        extensionInstalled: b.extensionPrefix ? installed.length > 0 : null,
+        extensionVersion:
+          installed[0]?.replace(`${b.extensionPrefix}-`, '').replace(/-(darwin|linux|win32).*$/, '') ?? null,
       });
       break; // first matching dirName wins
     }

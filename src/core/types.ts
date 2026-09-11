@@ -34,6 +34,9 @@ export interface Host {
    */
   inconsistent: boolean;
   providerId: string;
+  /** Whether the provider's extension is installed here. Null if unknowable. */
+  extensionInstalled?: boolean | null;
+  extensionVersion?: string | null;
 }
 
 /**
@@ -67,6 +70,13 @@ export interface Provider {
   label: string;
   /** Environment variable that selects the config directory. */
   envVar: string;
+  /**
+   * Basename of the provider's CLI binary, for spotting running sessions.
+   * Defaults to the provider id.
+   */
+  processName?: string;
+  /** Whether the provider's CLI is actually installed on this machine. */
+  isInstalled?(): { installed: boolean; detail: string };
   sharePolicy: SharePolicy;
   discoverAccounts(): Account[];
   discoverHosts(): Host[];

@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { sharedStore, exists } from './paths.ts';
+import { sharedStore, exists, appHome } from './paths.ts';
 import type { Provider } from './types.ts';
 
 export interface Conversation {
@@ -10,7 +10,9 @@ export interface Conversation {
   cwd: string;
   project: string;
   title: string;
-  messages: number;
+  /** Exact turn count, or null when the transcript was too large to read whole. */
+  messages: number | null;
+  sizeBytes: number;
   startedAt: string | null;
   updatedAt: string | null;
   /**
@@ -60,15 +62,62 @@ export function textOf(message: unknown): string | null {
   return parts.length ? parts.join('\n') : null;
 }
 
-function readOne(file: string, providerId: string): Conversation | null {
-  let raw: string;
+/** Bytes read from the start of a transcript: enough for the opening turns. */
+const HEAD_BYTES = 256 * 1024;
+/** Bytes read from the end: enough for the final timestamped entry. */
+const TAIL_BYTES = 64 * 1024;
+
+/**
+ * Read only the head and tail of a transcript.
+ *
+ * Everything the list needs — title, project, launch source, first and last
+ * timestamp — lives in the opening and closing lines. Reading whole files to
+ * reach them meant hundreds of MB of I/O per listing, for metadata measured in
+ * bytes. An exact message count is the one thing this gives up, so it is
+ * reported only when the file was small enough to be read whole.
+ */
+function readHeadAndTail(file: string): { head: string; tail: string; size: number; whole: boolean } | null {
+  let fd: number;
+  let size: number;
   try {
-    raw = fs.readFileSync(file, 'utf8');
+    size = fs.statSync(file).size;
+    fd = fs.openSync(file, 'r');
   } catch {
     return null;
   }
 
-  const lines = raw.split('\n').filter(Boolean);
+  try {
+    if (size <= HEAD_BYTES) {
+      const buf = Buffer.allocUnsafe(size);
+      fs.readSync(fd, buf, 0, size, 0);
+      return { head: buf.toString('utf8'), tail: '', size, whole: true };
+    }
+
+    const headBuf = Buffer.allocUnsafe(HEAD_BYTES);
+    fs.readSync(fd, headBuf, 0, HEAD_BYTES, 0);
+
+    const tailLen = Math.min(TAIL_BYTES, size - HEAD_BYTES);
+    const tailBuf = Buffer.allocUnsafe(tailLen);
+    fs.readSync(fd, tailBuf, 0, tailLen, size - tailLen);
+
+    return { head: headBuf.toString('utf8'), tail: tailBuf.toString('utf8'), size, whole: false };
+  } catch {
+    return null;
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function readOne(file: string, providerId: string): Conversation | null {
+  const chunk = readHeadAndTail(file);
+  if (!chunk) return null;
+
+  // A partial read can slice a line in half at either boundary; drop those.
+  const headLines = chunk.head.split('\n').filter(Boolean);
+  if (!chunk.whole && headLines.length) headLines.pop();
+  const tailLines = chunk.tail.split('\n').filter(Boolean).slice(1);
+
+  const lines = [...headLines, ...tailLines];
   if (!lines.length) return null;
 
   let cwd = '';
@@ -122,7 +171,8 @@ function readOne(file: string, providerId: string): Conversation | null {
     cwd,
     project: cwd ? path.basename(cwd) : path.basename(path.dirname(file)),
     title: title || '(no prompt)',
-    messages,
+    messages: chunk.whole ? messages : null,
+    sizeBytes: chunk.size,
     startedAt,
     updatedAt,
     launchedFrom,
@@ -135,7 +185,61 @@ export interface HistoryFilter {
   project?: string;
   launchedFrom?: string;
   search?: string;
+  /** Page size. */
   limit?: number;
+  /** Rows to skip, for paging. */
+  offset?: number;
+}
+
+export interface HistoryPage {
+  conversations: Conversation[];
+  /** Rows matching the filter, before paging. */
+  total: number;
+  /** Conversations in the store, before filtering. */
+  totalUnfiltered: number;
+  offset: number;
+  limit: number | null;
+  hasMore: boolean;
+  /** Files re-parsed this call; the rest came from cache. */
+  reparsed: number;
+}
+
+// --------------------------------------------------------------- cache
+//
+// Parsing every transcript on every call means re-reading hundreds of MB to
+// answer a question whose answer almost never changes. Entries are keyed by
+// mtime and size, so only files actually written since the last call are read.
+
+interface CacheEntry {
+  mtimeMs: number;
+  size: number;
+  conv: Conversation | null;
+}
+
+const CACHE_VERSION = 2;
+const cacheFile = () => path.join(appHome(), 'cache', 'history-index.json');
+
+function loadCache(): Record<string, CacheEntry> {
+  try {
+    const raw = JSON.parse(fs.readFileSync(cacheFile(), 'utf8')) as {
+      version?: number;
+      entries?: Record<string, CacheEntry>;
+    };
+    // A parser change invalidates everything it produced.
+    return raw.version === CACHE_VERSION ? (raw.entries ?? {}) : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveCache(entries: Record<string, CacheEntry>): void {
+  try {
+    const f = cacheFile();
+    fs.mkdirSync(path.dirname(f), { recursive: true });
+    fs.writeFileSync(f, JSON.stringify({ version: CACHE_VERSION, entries }), 'utf8');
+  } catch {
+    /* a cache that cannot be written is a slowdown, not a failure */
+  }
 }
 
 /**
@@ -148,8 +252,11 @@ export interface HistoryFilter {
 export function listConversations(
   providers: Provider[],
   filter: HistoryFilter = {},
-): Conversation[] {
+): HistoryPage {
+  const cache = loadCache();
+  const fresh: Record<string, CacheEntry> = {};
   const out: Conversation[] = [];
+  let reparsed = 0;
 
   for (const provider of providers) {
     const root = path.join(sharedStore(provider.id), 'projects');
@@ -170,13 +277,35 @@ export function listConversations(
       } catch {
         continue;
       }
+
       for (const f of files) {
-        const conv = readOne(path.join(full, f), provider.id);
+        const file = path.join(full, f);
+
+        let stat: fs.Stats;
+        try {
+          stat = fs.statSync(file);
+        } catch {
+          continue;
+        }
+
+        const hit = cache[file];
+        if (hit && hit.mtimeMs === stat.mtimeMs && hit.size === stat.size) {
+          fresh[file] = hit;
+          if (hit.conv) out.push(hit.conv);
+          continue;
+        }
+
+        const conv = readOne(file, provider.id);
+        reparsed++;
+        fresh[file] = { mtimeMs: stat.mtimeMs, size: stat.size, conv };
         if (conv) out.push(conv);
       }
     }
   }
 
+  if (reparsed || Object.keys(fresh).length !== Object.keys(cache).length) saveCache(fresh);
+
+  const totalUnfiltered = out.length;
   let result = out.sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''));
 
   if (filter.project) result = result.filter((c) => c.project === filter.project);
@@ -187,7 +316,21 @@ export function listConversations(
       (c) => c.title.toLowerCase().includes(q) || c.project.toLowerCase().includes(q),
     );
   }
-  return filter.limit ? result.slice(0, filter.limit) : result;
+
+  const total = result.length;
+  const offset = Math.max(0, filter.offset ?? 0);
+  const limit = filter.limit ?? null;
+  const page = limit === null ? result.slice(offset) : result.slice(offset, offset + limit);
+
+  return {
+    conversations: page,
+    total,
+    totalUnfiltered,
+    offset,
+    limit,
+    hasMore: limit !== null && offset + page.length < total,
+    reparsed,
+  };
 }
 
 /** Distinct values available for the filter controls. */
