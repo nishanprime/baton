@@ -145,6 +145,65 @@ fn switch_account(app: AppHandle, account: String, host: Option<String>) -> Resu
 }
 
 #[tauri::command]
+fn settings(app: AppHandle) -> Result<Value, String> {
+    run_cli(&app, &["settings"])
+}
+
+#[tauri::command]
+fn set_setting(app: AppHandle, key: String, value: String) -> Result<Value, String> {
+    run_cli(&app, &["settings", "set", key.as_str(), value.as_str()])
+}
+
+#[tauri::command]
+fn add_account(app: AppHandle, name: String) -> Result<Value, String> {
+    let result = run_cli(&app, &["add", name.as_str()])?;
+    let _ = app.emit("accounts-changed", ());
+    Ok(result)
+}
+
+#[tauri::command]
+fn history(app: AppHandle, search: Option<String>, project: Option<String>, from: Option<String>) -> Result<Value, String> {
+    let mut args: Vec<String> = vec!["history".into()];
+    if let Some(v) = search.filter(|v| !v.is_empty()) { args.push("--search".into()); args.push(v); }
+    if let Some(v) = project.filter(|v| !v.is_empty()) { args.push("--project".into()); args.push(v); }
+    if let Some(v) = from.filter(|v| !v.is_empty()) { args.push("--from".into()); args.push(v); }
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    run_cli(&app, &refs)
+}
+
+#[tauri::command]
+fn autoswitch(app: AppHandle) -> Result<Value, String> {
+    let result = run_cli(&app, &["autoswitch"])?;
+    if result.get("acted") == Some(&Value::Bool(true)) {
+        let _ = app.emit("accounts-changed", ());
+    }
+    Ok(result)
+}
+
+#[tauri::command]
+fn doctor(app: AppHandle) -> Result<Value, String> {
+    run_cli(&app, &["doctor"])
+}
+
+/// Open a terminal sitting at the login command, so adding an account does not
+/// mean copying a path by hand.
+#[tauri::command]
+fn open_login_terminal(command: String) -> Result<(), String> {
+    let script = format!(
+        r#"tell application "Terminal"
+            activate
+            do script "{}"
+        end tell"#,
+        command.replace('\\', "\\\\").replace('"', "\\\"")
+    );
+    Command::new("osascript")
+        .args(["-e", &script])
+        .status()
+        .map_err(|e| format!("could not open Terminal: {e}"))?;
+    Ok(())
+}
+
+#[tauri::command]
 fn preview_link(app: AppHandle) -> Result<Value, String> {
     run_cli(&app, &["link", "--all", "--dry-run"])
 }
@@ -230,7 +289,14 @@ fn main() {
             status,
             switch_account,
             preview_link,
-            apply_link
+            apply_link,
+            settings,
+            set_setting,
+            add_account,
+            doctor,
+            history,
+            autoswitch,
+            open_login_terminal
         ])
         .setup(|app| {
             build_tray(app.handle())?;

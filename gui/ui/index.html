@@ -4,184 +4,19 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Baton</title>
-<style>
-  :root {
-    --bg: #ffffff; --fg: #1a1a1a; --muted: #6b7280; --line: #e5e7eb;
-    --accent: #2563eb; --accent-fg: #ffffff; --ok: #059669; --warn: #b45309;
-    --card: #f9fafb;
-    color-scheme: light dark;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #17181c; --fg: #e8e8ea; --muted: #9096a0; --line: #2b2d33;
-      --accent: #3b82f6; --accent-fg: #ffffff; --ok: #34d399; --warn: #fbbf24;
-      --card: #1e2026;
-    }
-  }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0; background: var(--bg); color: var(--fg);
-    font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-    padding: 16px;
-  }
-  h1 { font-size: 15px; margin: 0 0 2px; letter-spacing: -0.01em; }
-  .sub { color: var(--muted); font-size: 12px; margin-bottom: 16px; }
-  h2 {
-    font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
-    color: var(--muted); margin: 18px 0 8px; font-weight: 600;
-  }
-  .row {
-    display: flex; align-items: center; gap: 10px;
-    padding: 9px 11px; border: 1px solid var(--line); border-radius: 8px;
-    background: var(--card); margin-bottom: 6px;
-  }
-  .grow { flex: 1; min-width: 0; }
-  .name { font-weight: 600; }
-  .meta { color: var(--muted); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .pill {
-    font-size: 10.5px; padding: 2px 7px; border-radius: 999px;
-    background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok);
-    white-space: nowrap; font-weight: 600;
-  }
-  select {
-    font: inherit; padding: 5px 8px; border-radius: 6px;
-    border: 1px solid var(--line); background: var(--bg); color: var(--fg);
-    max-width: 150px;
-  }
-  button {
-    font: inherit; font-weight: 600; padding: 8px 13px; border-radius: 7px;
-    border: 0; background: var(--accent); color: var(--accent-fg); cursor: pointer;
-  }
-  button.ghost { background: transparent; color: var(--fg); border: 1px solid var(--line); }
-  button:disabled { opacity: 0.5; cursor: default; }
-  #msg { padding: 9px 11px; border-radius: 7px; margin-bottom: 12px; font-size: 12px; display: none; }
-  #msg.err { display: block; background: color-mix(in srgb, #dc2626 14%, transparent); color: #dc2626; }
-  #msg.ok  { display: block; background: color-mix(in srgb, var(--ok) 14%, transparent); color: var(--ok); }
-  .hint { color: var(--muted); font-size: 11.5px; margin-top: 12px; }
-  .actions { display: flex; gap: 8px; margin-top: 14px; }
-</style>
+<link rel="stylesheet" href="app.css" />
 </head>
 <body>
-  <h1>Baton</h1>
-  <div class="sub" id="store">Loading…</div>
+  <header><h1>Baton</h1><div class="sub" id="sub">Loading…</div></header>
+  <nav>
+    <button data-tab="accounts" aria-selected="true">Accounts</button>
+    <button data-tab="editors" aria-selected="false">Editors</button>
+    <button data-tab="history" aria-selected="false">History</button>
+    <button data-tab="settings" aria-selected="false">Settings</button>
+  </nav>
   <div id="msg"></div>
-  <div id="content"></div>
-  <div class="actions">
-    <button id="refresh" class="ghost">Refresh</button>
-    <button id="pool">Pool history…</button>
-  </div>
-  <div class="hint">
-    After switching, reload the editor window, then <code>claude --resume</code> —
-    your conversations are all still there.
-  </div>
-
-<script type="module">
-const $ = (id) => document.getElementById(id);
-
-// If the API is missing the whole script would otherwise throw on load, leaving
-// a dead window with no explanation. Say so on the page instead.
-if (!window.__TAURI__?.core?.invoke) {
-  $('store').textContent = 'Tauri API unavailable';
-  const el = $('msg');
-  el.className = 'err';
-  el.textContent =
-    'This page has to run inside the Baton app. If you are seeing this in the app, '
-    + 'the build is missing withGlobalTauri.';
-  throw new Error('Tauri API unavailable');
-}
-
-const { invoke } = window.__TAURI__.core;
-const { listen } = window.__TAURI__.event;
-const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) =>
-  ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-
-let state = null;
-
-function say(text, kind = 'ok') {
-  const el = $('msg');
-  el.className = kind;
-  el.textContent = text;
-  if (kind === 'ok') setTimeout(() => { el.className = ''; }, 4000);
-}
-
-function render() {
-  const p = state?.providers?.[0];
-  if (!p) { $('content').innerHTML = '<div class="meta">No providers found.</div>'; return; }
-
-  $('store').textContent = `${p.label} · ${p.accounts.length} account${p.accounts.length === 1 ? '' : 's'}`;
-
-  const accounts = p.accounts.map((a) => `
-    <div class="row">
-      <div class="grow">
-        <div class="name">${esc(a.id)}</div>
-        <div class="meta">${esc(a.email ?? 'not logged in')}</div>
-      </div>
-      ${a.usedBy.length ? `<span class="pill">${esc(a.usedBy.join(', '))}</span>` : ''}
-    </div>`).join('');
-
-  const editors = p.hosts.map((h) => `
-    <div class="row">
-      <div class="grow">
-        <div class="name">${esc(h.label)}</div>
-        <div class="meta">${h.inconsistent ? '⚠ settings keys disagree' : esc(h.accountId ?? 'default account')}</div>
-      </div>
-      <select data-host="${esc(h.id)}">
-        ${p.accounts.map((a) =>
-          `<option value="${esc(a.id)}"${a.id === h.accountId ? ' selected' : ''}>${esc(a.id)}</option>`
-        ).join('')}
-      </select>
-    </div>`).join('');
-
-  $('content').innerHTML = `<h2>Accounts</h2>${accounts}<h2>Editors</h2>${editors}`;
-
-  for (const sel of document.querySelectorAll('select[data-host]')) {
-    sel.addEventListener('change', async (e) => {
-      const host = e.target.dataset.host;
-      const account = e.target.value;
-      e.target.disabled = true;
-      try {
-        await invoke('switch_account', { account, host });
-        say(`${host} → ${account}. Reload that editor's window.`);
-        await refresh();
-      } catch (err) {
-        say(String(err), 'err');
-        await refresh();
-      }
-    });
-  }
-}
-
-async function refresh() {
-  try {
-    state = await invoke('status');
-    render();
-  } catch (err) {
-    say(String(err), 'err');
-  }
-}
-
-$('refresh').addEventListener('click', refresh);
-
-$('pool').addEventListener('click', async () => {
-  try {
-    const preview = await invoke('preview_link');
-    const risky = JSON.stringify(preview).includes('overwritten-by-store');
-    const warn = risky
-      ? '\n\nSome single-value files cannot be combined — the first copy wins and the other is kept as a backup.'
-      : '';
-    if (!confirm(`Move all conversation history into one shared store?\n\nEvery account will read and write the same history from then on. Everything is backed up first.${warn}`)) return;
-    await invoke('apply_link');
-    say('History pooled. Every account now shares it.');
-    await refresh();
-  } catch (err) {
-    say(String(err), 'err');
-  }
-});
-
-listen('accounts-changed', refresh);
-listen('baton-error', (e) => say(String(e.payload), 'err'));
-
-refresh();
-</script>
+  <main id="main"></main>
+  <div id="scrim"><div class="modal" id="modal"></div></div>
+  <script type="module" src="app.js"></script>
 </body>
 </html>

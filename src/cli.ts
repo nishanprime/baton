@@ -4,6 +4,10 @@ import { linkAccount, unlinkAccount } from './core/share.ts';
 import { switchHost } from './core/switch.ts';
 import { appHome, sharedStore } from './core/paths.ts';
 import { runSetup, createAccount, loginHint } from './core/setup.ts';
+import { loadSettings, setSetting, settingsPath, SCHEMA } from './core/settings.ts';
+import { listConversations, historyFacets } from './core/history.ts';
+import { findLimitEvents } from './core/limits.ts';
+import { loadState, saveState } from './core/state.ts';
 import type { Account, Host, Provider } from './core/types.ts';
 
 const argv = process.argv.slice(2);
@@ -12,25 +16,23 @@ const positional = argv.filter((a) => !a.startsWith('--'));
 const dryRun = flags.has('--dry-run');
 const asJson = flags.has('--json');
 
-/** Machine-readable output for the GUI, which drives this CLI. */
-function emit(payload: unknown): void {
-  console.log(JSON.stringify(payload, null, 2));
-}
-
 const flagValue = (name: string): string | undefined => {
   const i = argv.indexOf(name);
   return i >= 0 ? argv[i + 1] : undefined;
 };
 
-const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
-const bold = (s: string) => `\x1b[1m${s}\x1b[0m`;
-const green = (s: string) => `\x1b[32m${s}\x1b[0m`;
-const yellow = (s: string) => `\x1b[33m${s}\x1b[0m`;
+const dim = (s: string) => (asJson ? s : `\x1b[2m${s}\x1b[0m`);
+const bold = (s: string) => (asJson ? s : `\x1b[1m${s}\x1b[0m`);
+const green = (s: string) => (asJson ? s : `\x1b[32m${s}\x1b[0m`);
+const yellow = (s: string) => (asJson ? s : `\x1b[33m${s}\x1b[0m`);
 
-function resolveProvider(): Provider {
+/** Machine-readable output for the GUI, which drives this CLI. */
+const emit = (payload: unknown): void => console.log(JSON.stringify(payload, null, 2));
+
+const resolveProvider = (): Provider => {
   const id = flagValue('--provider');
   return id ? getProvider(id) : defaultProvider();
-}
+};
 
 function findAccount(accounts: Account[], key: string): Account {
   const hit = accounts.find((a) => a.id === key || a.configDir === key || a.email === key);
@@ -42,48 +44,52 @@ function findAccount(accounts: Account[], key: string): Account {
   return hit;
 }
 
-function describeAccount(a: Account, hosts: Host[]): string {
-  const users = hosts.filter((h) => h.configDir === a.configDir).map((h) => h.label);
-  const who = a.email ? dim(` ${a.email}`) : dim(' (not logged in?)');
-  const used = users.length ? green(`  ← ${users.join(', ')}`) : '';
-  return `  ${bold(a.id.padEnd(16))}${who}${used}\n    ${dim(a.configDir)}`;
-}
+// ---------------------------------------------------------------- status
 
 function cmdStatus(): void {
+  const settings = loadSettings();
+  const data = PROVIDERS.map((provider) => {
+    const accounts = provider.discoverAccounts();
+    const hosts = provider.discoverHosts();
+    return { provider, accounts, hosts };
+  });
+
   if (asJson) {
     emit({
       appHome: appHome(),
-      providers: PROVIDERS.map((provider) => {
-        const accounts = provider.discoverAccounts();
-        const hosts = provider.discoverHosts();
-        return {
-          id: provider.id,
-          label: provider.label,
-          envVar: provider.envVar,
-          sharedStore: sharedStore(provider.id),
-          accounts: accounts.map((a) => ({
-            ...a,
-            usedBy: hosts.filter((h) => h.configDir === a.configDir).map((h) => h.id),
-          })),
-          hosts: hosts.map((h) => ({
-            ...h,
-            accountId: accounts.find((a) => a.configDir === h.configDir)?.id ?? null,
-          })),
-        };
-      }),
+      settings,
+      settingsPath: settingsPath(),
+      providers: data.map(({ provider, accounts, hosts }) => ({
+        id: provider.id,
+        label: provider.label,
+        envVar: provider.envVar,
+        sharedStore: sharedStore(provider.id),
+        accounts: accounts.map((a) => ({
+          ...a,
+          usedBy: hosts.filter((h) => h.configDir === a.configDir).map((h) => h.id),
+        })),
+        hosts: hosts.map((h) => ({
+          ...h,
+          accountId: accounts.find((a) => a.configDir === h.configDir)?.id ?? null,
+        })),
+      })),
     });
     return;
   }
-  console.log(`${bold('Baton')} ${dim(`· state in ${appHome()}`)}\n`);
-  for (const provider of PROVIDERS) {
-    const accounts = provider.discoverAccounts();
-    const hosts = provider.discoverHosts();
-    console.log(`${bold(provider.label)} ${dim(`(${provider.envVar})`)}`);
 
+  console.log(`${bold('Baton')} ${dim(`· state in ${appHome()}`)}\n`);
+  for (const { provider, accounts, hosts } of data) {
+    console.log(`${bold(provider.label)} ${dim(`(${provider.envVar})`)}`);
     console.log(`\n ${bold('Accounts')}`);
     if (!accounts.length) console.log(dim('  none found'));
-    for (const a of accounts) console.log(describeAccount(a, hosts));
-
+    for (const a of accounts) {
+      const users = hosts.filter((h) => h.configDir === a.configDir).map((h) => h.label);
+      console.log(
+        `  ${bold(a.id.padEnd(16))}${dim(a.email ?? '(not logged in)')}` +
+          (users.length ? green(`  ← ${users.join(', ')}`) : ''),
+      );
+      console.log(`    ${dim(a.configDir)}`);
+    }
     console.log(`\n ${bold('Editors')}`);
     if (!hosts.length) console.log(dim('  none found'));
     for (const h of hosts) {
@@ -91,11 +97,12 @@ function cmdStatus(): void {
       const label = acct ? green(acct.id) : h.configDir ? yellow('unmanaged dir') : dim('default');
       const warn = h.inconsistent ? yellow('  ⚠ settings keys disagree — run `baton doctor`') : '';
       console.log(`  ${h.label.padEnd(18)} ${label}${warn}`);
-      console.log(`    ${dim(h.configFile)}`);
     }
     console.log(`\n ${bold('Shared store')}  ${dim(sharedStore(provider.id))}\n`);
   }
 }
+
+// ---------------------------------------------------------------- use
 
 function cmdUse(): void {
   const provider = resolveProvider();
@@ -136,17 +143,17 @@ function cmdUse(): void {
   }
 
   for (const r of results) {
-    const host = r.host;
     const prefix = dryRun ? yellow('[dry-run]') : green('✓');
-    console.log(`${prefix} ${host.label} → ${bold(to.id)}${to.email ? dim(` (${to.email})`) : ''}`);
+    console.log(`${prefix} ${r.host.label} → ${bold(to.id)}${to.email ? dim(` (${to.email})`) : ''}`);
     if (r.from) console.log(dim(`    carried project state forward from ${r.from.id}`));
-    console.log(dim(`    ${host.configFile}`));
   }
-  if (!dryRun) {
+  if (!dryRun && loadSettings().showReloadHint) {
     console.log(`\n${yellow('Reload the editor window')} for the change to take effect.`);
     console.log(dim('Then `claude --resume` — your conversations are all still there.'));
   }
 }
+
+// ---------------------------------------------------------------- link
 
 function cmdLink(): void {
   const provider = resolveProvider();
@@ -154,15 +161,32 @@ function cmdLink(): void {
   const key = positional[1];
   const targets = flags.has('--all') || !key ? accounts : [findAccount(accounts, key)];
 
-  // Shared across accounts so a dry run predicts merges the way a real run does.
   const storeState = new Map<string, string>();
-  for (const a of targets) {
-    console.log(`${bold(a.id)} ${dim(a.configDir)}`);
-    for (const act of linkAccount(provider, a, { dryRun, storeState })) {
-      if (act.action === 'skipped') continue;
+  const report = targets.map((a) => ({
+    account: a.id,
+    configDir: a.configDir,
+    actions: linkAccount(provider, a, { dryRun, storeState }).filter((x) => x.action !== 'skipped'),
+  }));
+
+  if (asJson) {
+    emit({
+      ok: true,
+      dryRun,
+      sharedStore: sharedStore(provider.id),
+      lossy: report.flatMap((r) => r.actions).filter((a) => a.action === 'overwritten-by-store').length,
+      accounts: report,
+    });
+    return;
+  }
+
+  for (const r of report) {
+    console.log(`${bold(r.account)} ${dim(r.configDir)}`);
+    for (const act of r.actions) {
       const mark =
         act.action === 'overwritten-by-store' ? yellow('!') : dryRun ? yellow('·') : green('✓');
-      console.log(`  ${mark} ${act.entry.padEnd(18)} ${dim(act.action)}${act.detail ? dim(` — ${act.detail}`) : ''}`);
+      console.log(
+        `  ${mark} ${act.entry.padEnd(18)} ${dim(act.action)}${act.detail ? dim(` — ${act.detail}`) : ''}`,
+      );
     }
   }
   console.log(`\n${dim(`shared store: ${sharedStore(provider.id)}`)}`);
@@ -170,50 +194,213 @@ function cmdLink(): void {
 
 function cmdUnlink(): void {
   const provider = resolveProvider();
-  const accounts = provider.discoverAccounts();
   const key = positional[1];
   if (!key) throw new Error('Usage: baton unlink <account> [--dry-run]');
-  const a = findAccount(accounts, key);
-  for (const act of unlinkAccount(provider, a, { dryRun })) {
-    console.log(`  ${act.entry.padEnd(18)} ${dim(act.detail ?? '')}`);
-  }
+  const a = findAccount(provider.discoverAccounts(), key);
+  const actions = unlinkAccount(provider, a, { dryRun });
+  if (asJson) return emit({ ok: true, account: a.id, dryRun, actions });
+  for (const act of actions) console.log(`  ${act.entry.padEnd(18)} ${dim(act.detail ?? '')}`);
 }
 
-function cmdDoctor(): void {
-  let problems = 0;
-  for (const provider of PROVIDERS) {
-    const accounts = provider.discoverAccounts();
-    for (const h of provider.discoverHosts()) {
-      if (h.inconsistent) {
-        problems++;
-        console.log(yellow(`⚠ ${h.label}: the two ${provider.envVar} settings disagree.`));
-        console.log(dim(`  Fix: baton use <account> --host ${h.id}`));
-      }
-      if (h.configDir && !accounts.some((a) => a.configDir === h.configDir)) {
-        problems++;
-        console.log(yellow(`⚠ ${h.label} points at an unrecognised dir: ${h.configDir}`));
-      }
-    }
-    for (const a of accounts) {
-      if (!a.email) {
-        problems++;
-        console.log(yellow(`⚠ ${a.id}: no account identity found — may need \`claude /login\`.`));
-      }
-    }
-  }
-  console.log(problems ? `\n${problems} issue(s).` : green('✓ everything consistent.'));
-}
+// ---------------------------------------------------------------- add
 
 function cmdAdd(): void {
   const provider = resolveProvider();
   const name = positional[1];
   if (!name) throw new Error('Usage: baton add <name>');
   const dir = createAccount(provider, name);
+  const command = loginHint(provider, dir);
+
+  if (asJson) {
+    return emit({
+      ok: true,
+      account: name,
+      configDir: dir,
+      loginCommand: command,
+      next: 'Run the login command in a terminal, then /login inside that session.',
+    });
+  }
   console.log(`${green('✓')} Created ${dir}`);
-  console.log(`\nLog into it with:\n  ${bold(loginHint(provider, dir))}`);
+  console.log(`\nLog into it with:\n  ${bold(command)}`);
   console.log(dim('Then run /login inside that session.'));
-  console.log(dim(`\nAfterwards: baton link ${name}  &&  baton use ${name} --all`));
+  console.log(dim(`\nAfterwards: baton link ${name} && baton use ${name} --all`));
 }
+
+// ---------------------------------------------------------------- settings
+
+function cmdSettings(): void {
+  const sub = positional[1];
+
+  if (sub === 'set') {
+    const [key, ...rest] = positional.slice(2);
+    const raw = rest.join(' ') || flagValue('--value');
+    if (!key || raw === undefined) throw new Error('Usage: baton settings set <key> <value>');
+    const next = setSetting(key, raw);
+    if (asJson) return emit({ ok: true, settings: next, path: settingsPath() });
+    console.log(`${green('✓')} ${key} = ${JSON.stringify(getAt(next, key))}`);
+    return;
+  }
+
+  const settings = loadSettings();
+  if (asJson) return emit({ ok: true, settings, schema: SCHEMA, path: settingsPath() });
+
+  console.log(`${bold('Settings')} ${dim(settingsPath())}\n`);
+  for (const [key, spec] of Object.entries(SCHEMA)) {
+    const value = getAt(settings, key);
+    console.log(`  ${bold(key.padEnd(24))} ${String(JSON.stringify(value)).padEnd(12)} ${dim(spec.help)}`);
+  }
+  console.log(`\n${dim('Change one with: baton settings set <key> <value>')}`);
+}
+
+function getAt(obj: unknown, dotted: string): unknown {
+  return dotted
+    .split('.')
+    .reduce<unknown>((acc, k) => (acc as Record<string, unknown> | undefined)?.[k], obj);
+}
+
+// ---------------------------------------------------------------- history
+
+function cmdHistory(): void {
+  const providerFlag = flagValue('--provider');
+  const providers = providerFlag ? [getProvider(providerFlag)] : PROVIDERS;
+  const limitRaw = flagValue('--limit');
+
+  const all = listConversations(providers);
+  const filtered = listConversations(providers, {
+    project: flagValue('--project'),
+    launchedFrom: flagValue('--from'),
+    search: flagValue('--search'),
+    limit: limitRaw ? Number(limitRaw) : undefined,
+  });
+
+  if (asJson) {
+    return emit({
+      ok: true,
+      total: all.length,
+      shown: filtered.length,
+      facets: historyFacets(all),
+      conversations: filtered,
+    });
+  }
+
+  console.log(`${bold('Conversations')} ${dim(`${filtered.length} of ${all.length}`)}\n`);
+  for (const c of filtered) {
+    const when = c.updatedAt ? c.updatedAt.slice(0, 16).replace('T', ' ') : '';
+    console.log(`  ${dim(when)}  ${bold(c.project.padEnd(18))} ${c.title}`);
+    console.log(`  ${dim(`${' '.repeat(16)}  ${c.messages} msgs · ${c.sessionId}`)}`);
+  }
+  if (!filtered.length) console.log(dim('  nothing matched'));
+}
+
+// ---------------------------------------------------------------- autoswitch
+
+/**
+ * Check whether the active account is spent and act on it.
+ *
+ * Meant to be polled. State records the newest event already handled, so a
+ * single exhaustion does not cause a switch on every poll.
+ */
+function cmdAutoswitch(): void {
+  const settings = loadSettings();
+  const provider = resolveProvider();
+  const accounts = provider.discoverAccounts();
+  const hosts = provider.discoverHosts().filter((h) => h.configDir);
+  const state = loadState();
+
+  const windowMinutes = Number(flagValue('--since') ?? 30);
+  const events = findLimitEvents([provider], { sinceMinutes: windowMinutes });
+  const newest = events[0];
+  const isNew = !!newest && newest.at !== state.lastHandledLimitAt;
+
+  // Accounts currently in use are the ones that just hit the wall.
+  const activeIds = new Set(
+    hosts.map((h) => accounts.find((a) => a.configDir === h.configDir)?.id).filter(Boolean) as string[],
+  );
+  const rotation = settings.autoSwitch.rotation.length
+    ? settings.autoSwitch.rotation
+    : accounts.filter((a) => !a.isDefault).map((a) => a.id);
+  const candidate = rotation.find((id) => !activeIds.has(id) && accounts.some((a) => a.id === id));
+
+  const base = {
+    ok: true,
+    enabled: settings.autoSwitch.enabled,
+    mode: settings.autoSwitch.mode,
+    spent: isNew,
+    event: newest ?? null,
+    activeAccounts: [...activeIds],
+    candidate: candidate ?? null,
+    acted: false as boolean,
+    switched: [] as string[],
+  };
+
+  const shouldAct =
+    isNew && settings.autoSwitch.enabled && settings.autoSwitch.mode === 'switch' && !!candidate;
+
+  if (shouldAct) {
+    const to = findAccount(accounts, candidate!);
+    for (const host of hosts) switchHost(provider, host, to, accounts);
+    base.acted = true;
+    base.switched = hosts.map((h) => h.id);
+  }
+
+  if (isNew && (shouldAct || settings.autoSwitch.enabled)) {
+    saveState({
+      ...state,
+      lastHandledLimitAt: newest!.at,
+      ...(shouldAct ? { lastSwitchedTo: candidate!, lastSwitchedAt: new Date().toISOString() } : {}),
+    });
+  }
+
+  if (asJson) return emit(base);
+
+  if (!isNew) {
+    console.log(green('✓ no new limit events.'));
+    return;
+  }
+  console.log(yellow(`Limit reached — ${newest!.message}`));
+  if (!settings.autoSwitch.enabled) {
+    console.log(dim('Auto-switch is off. Turn it on: baton settings set autoSwitch.enabled true'));
+  } else if (!candidate) {
+    console.log(yellow('No spare account to switch to. Add one with `baton add <name>`.'));
+  } else if (base.acted) {
+    console.log(green(`✓ switched ${base.switched.join(', ')} → ${candidate}`));
+    console.log(dim('Reload the editor window, then `claude --resume`.'));
+  } else {
+    console.log(`Suggested: ${bold(candidate)}  ${dim('(mode is notify, so nothing was changed)')}`);
+  }
+}
+
+// ---------------------------------------------------------------- doctor
+
+function cmdDoctor(): void {
+  const issues: { level: 'warn'; message: string; fix?: string }[] = [];
+  for (const provider of PROVIDERS) {
+    const accounts = provider.discoverAccounts();
+    for (const h of provider.discoverHosts()) {
+      if (h.inconsistent) {
+        issues.push({
+          level: 'warn',
+          message: `${h.label}: the two ${provider.envVar} settings disagree.`,
+          fix: `baton use <account> --host ${h.id}`,
+        });
+      }
+      if (h.configDir && !accounts.some((a) => a.configDir === h.configDir)) {
+        issues.push({ level: 'warn', message: `${h.label} points at an unrecognised dir: ${h.configDir}` });
+      }
+    }
+    for (const a of accounts.filter((x) => !x.email)) {
+      issues.push({ level: 'warn', message: `${a.id}: no account identity found — may need \`claude /login\`.` });
+    }
+  }
+  if (asJson) return emit({ ok: issues.length === 0, issues });
+  for (const i of issues) {
+    console.log(yellow(`⚠ ${i.message}`));
+    if (i.fix) console.log(dim(`  Fix: ${i.fix}`));
+  }
+  console.log(issues.length ? `\n${issues.length} issue(s).` : green('✓ everything consistent.'));
+}
+
+// ---------------------------------------------------------------- main
 
 const HELP = `${bold('baton')} — switch AI coding accounts across editors, keeping one shared history.
 
@@ -223,6 +410,9 @@ const HELP = `${bold('baton')} — switch AI coding accounts across editors, kee
   baton use <account> [opts]      point an editor at an account
   baton link [account|--all]      share history across accounts (run once)
   baton unlink <account>          restore an account to standalone files
+  baton settings [set <k> <v>]    view or change preferences
+  baton history [--search x]      browse pooled conversations
+  baton autoswitch                check for a spent account and act on it
   baton doctor                    find half-applied or inconsistent bindings
 
 Options
@@ -241,11 +431,14 @@ async function main(): Promise<void> {
     case 'use': cmdUse(); break;
     case 'link': cmdLink(); break;
     case 'unlink': cmdUnlink(); break;
+    case 'settings': case 'config': cmdSettings(); break;
+    case 'history': cmdHistory(); break;
+    case 'autoswitch': cmdAutoswitch(); break;
     case 'doctor': cmdDoctor(); break;
     case 'help': console.log(HELP); break;
     default:
-      console.error(`Unknown command "${positional[0]}"\n`);
-      console.log(HELP);
+      if (asJson) emit({ ok: false, error: `Unknown command "${positional[0]}"` });
+      else { console.error(`Unknown command "${positional[0]}"\n`); console.log(HELP); }
       process.exit(1);
   }
 }
