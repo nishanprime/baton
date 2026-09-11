@@ -657,7 +657,16 @@ async function loadHistory(offset) {
 
 // ---------------------------------------------------------------- account flows
 
-const STATE_PILL = { draft: 'Draft', active: 'Active', idle: 'Ready', spent: 'Limit reached' };
+const STATE_PILL = {
+  draft: 'Draft',
+  active: 'Active',
+  idle: 'Ready',
+  spent: 'Limit reached',
+  // Not "Ready". A limit was hit that nothing ties to an account, so calling
+  // this one fine would be an assertion Baton cannot make — which is how the
+  // account that had actually run out came to be shown as ready.
+  uncertain: 'Limit unclear',
+};
 
 async function loginFlow(a) {
   const command = a.loginCommand ?? a.reauth?.command;

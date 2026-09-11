@@ -226,3 +226,11 @@ code { background:var(--card); padding:1px 5px; border-radius:4px; font-size:11p
   color: var(--muted); font: inherit; font-size: 11.5px; text-decoration: underline;
 }
 .linkbtn:hover { color: var(--fg); }
+
+
+/* An account that cannot be cleared of a recent limit. Amber rather than the
+   green of Ready: the point is that it is not known to be fine. */
+.pill.uncertain {
+  background: color-mix(in srgb, var(--warn) 18%, transparent);
+  color: var(--warn);
+}

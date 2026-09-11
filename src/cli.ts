@@ -24,7 +24,7 @@ import {
 import { accountHealth, UNAVAILABLE_FIELDS } from './core/health.ts';
 import { findLiveSessions } from './core/sessions.ts';
 import { buildUsageReport } from './core/usage.ts';
-import { recordObservation, attributionStats } from './core/attribution.ts';
+import { recordObservation, attributionStats, setStatedAttribution } from './core/attribution.ts';
 import { listPins, setPin, removePin, pinFor } from './core/pins.ts';
 import { notify } from './core/notify.ts';
 import { findLimitEvents } from './core/limits.ts';
@@ -490,6 +490,7 @@ const STATE_LABEL: Record<string, string> = {
   active: 'active',
   idle: 'ready',
   spent: 'limit reached',
+  uncertain: 'limit unclear',
 };
 
 function cmdAccounts(): void {
@@ -606,6 +607,43 @@ function cmdRename(): void {
       console.log(yellow(`  ⚠ re-point ${h.label}: baton use ${newId} --host ${h.id}`));
     }
   }
+}
+
+/**
+ * Settle a limit event Baton could not place.
+ *
+ * Attribution only covers what Baton watched; the person at the keyboard knows
+ * which account was in the editor before that. This is how they say so.
+ */
+function cmdLimit(): void {
+  const provider = resolveProvider();
+  const accounts = provider.discoverAccounts();
+  const key = positional[1];
+  if (!key) throw new Error('Usage: baton limit <account> [--not]   (say whose a recent limit was)');
+  const account = findAccount(accounts, key);
+
+  const windowMinutes = Number(flagValue('--since') ?? 300);
+  const events = findLimitEvents([provider], { sinceMinutes: windowMinutes });
+  if (!events.length) {
+    if (asJson) return emit({ ok: true, updated: 0, note: 'no recent limit events' });
+    console.log(dim('No limit events in the last ' + windowMinutes + ' minutes.'));
+    return;
+  }
+
+  const ruleOut = flags.has('--not');
+  for (const e of events) {
+    setStatedAttribution(e.sessionId, ruleOut ? null : account.id, { ruleOut: account.id });
+  }
+
+  if (asJson) {
+    return emit({ ok: true, account: account.id, ruledOut: ruleOut, updated: events.length });
+  }
+  console.log(
+    ruleOut
+      ? `${green('✓')} ${bold(account.id)} ruled out for ${events.length} recent limit event(s).`
+      : `${green('✓')} ${events.length} recent limit event(s) recorded as ${bold(account.id)}'s.`,
+  );
+  console.log(dim('Stated by you, so it outranks anything Baton inferred.'));
 }
 
 // ---------------------------------------------------------------- health
@@ -1010,6 +1048,8 @@ const HELP = `${bold('baton')} — switch AI coding accounts across editors, kee
   baton remove <account>          delete an account (history is kept by default)
   baton rename <account> <new>    move its directory and re-point editors
   baton health                    per-account status and limits
+  baton limit <account> [--not]   say whose a recent limit was, when Baton
+                                  cannot tell
   baton sessions                  sessions running right now
   baton usage [--project x]       tokens and API-equivalent cost
                                   also --since / --until (ISO dates)
@@ -1067,6 +1107,7 @@ async function main(): Promise<void> {
     case 'reauth': cmdReauth(); break;
     case 'remove': cmdRemove(); break;
     case 'rename': cmdRename(); break;
+    case 'limit': cmdLimit(); break;
     case 'health': cmdHealth(); break;
     case 'sessions': cmdSessions(); break;
     case 'usage': cmdUsage(); break;

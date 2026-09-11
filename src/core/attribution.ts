@@ -60,7 +60,7 @@ const MAX_AGE_MS = 90 * 24 * 60 * 60 * 1000;
  */
 export const MATCH_GRACE_MS = 5 * 60_000;
 
-export type AttributionConfidence = 'exact' | 'inferred';
+export type AttributionConfidence = 'exact' | 'inferred' | 'stated';
 
 export interface AttributionRecord {
   providerId: string;
@@ -84,6 +84,10 @@ interface AttributionFile {
   /** True once pruning dropped records, so `since` no longer covers everything seen. */
   truncated: boolean;
   records: Record<string, AttributionRecord>;
+  /** Session id -> account, as stated by the user rather than observed. */
+  stated?: Record<string, string>;
+  /** Session id -> accounts the user has ruled out. */
+  excluded?: Record<string, string[]>;
 }
 
 export interface Attribution {
@@ -226,7 +230,16 @@ function parseFile(f: string): AttributionFile {
     const raw = JSON.parse(fs.readFileSync(f, 'utf8')) as Partial<AttributionFile>;
     data =
       raw.version === FILE_VERSION && raw.records && typeof raw.records === 'object'
-        ? { version: FILE_VERSION, since: raw.since ?? null, truncated: raw.truncated === true, records: raw.records }
+        ? {
+            version: FILE_VERSION,
+            since: raw.since ?? null,
+            truncated: raw.truncated === true,
+            records: raw.records,
+            // Carried explicitly: this rebuilds the shape rather than spreading,
+            // so anything not named here is silently dropped on the next write.
+            ...(raw.stated ? { stated: raw.stated } : {}),
+            ...(raw.excluded ? { excluded: raw.excluded } : {}),
+          }
         : emptyFile();
   } catch {
     // A half-written or hand-edited file loses its contents rather than taking
@@ -419,11 +432,55 @@ export function attributionFor(sessionId: string): string | null {
  * when more than one account does — two accounts in the same directory in the
  * same window is exactly the case where a guess would be wrong.
  */
+/**
+ * Record what the user says about a session Baton could not place.
+ *
+ * Attribution can only ever cover what Baton watched, and the person at the
+ * keyboard knows things it does not — which account was in the editor before
+ * any of this was installed, for instance. A stated answer outranks an inferred
+ * one and is not time-bounded, because it is not an observation.
+ *
+ * Passing null records the opposite: this account was NOT the one, which is the
+ * useful half when someone can rule themselves out but not name the culprit.
+ */
+export function setStatedAttribution(
+  sessionId: string,
+  accountId: string | null,
+  opts: { ruleOut?: string } = {},
+): void {
+  withLock(() => {
+    const data = readForUpdate();
+    data.stated ??= {};
+    data.excluded ??= {};
+
+    if (accountId) {
+      data.stated[sessionId] = accountId;
+      delete data.excluded[sessionId];
+    } else if (opts.ruleOut) {
+      const list = new Set(data.excluded[sessionId] ?? []);
+      list.add(opts.ruleOut);
+      data.excluded[sessionId] = [...list];
+    }
+    writeFile(data);
+  });
+}
+
+/** Accounts the user has explicitly ruled out for a session. */
+export function statedExclusions(sessionId: string): string[] {
+  return readFile().excluded?.[sessionId] ?? [];
+}
+
 export function resolveAttribution(
   sessionId: string | null,
   hint: { cwd?: string | null; at?: string | null } = {},
 ): Attribution | null {
   const data = readFile();
+
+  // What the user stated wins: it is testimony, not an observation, so no
+  // window applies and no inference can override it.
+  if (sessionId && data.stated?.[sessionId]) {
+    return { accountId: data.stated[sessionId]!, confidence: 'stated', recordedAt: data.since ?? '' };
+  }
 
   const at = hint.at ? Date.parse(hint.at) : Number.NaN;
 

@@ -11,7 +11,7 @@ import {
   renameAccount,
   LifecycleError,
 } from '../src/core/lifecycle.ts';
-import { clearAttributionCache } from '../src/core/attribution.ts';
+import { clearAttributionCache, setStatedAttribution } from '../src/core/attribution.ts';
 import { linkAccount } from '../src/core/share.ts';
 import { sharedStore } from '../src/core/paths.ts';
 import { claudeProvider } from '../src/providers/claude/index.ts';
@@ -168,7 +168,7 @@ test('a limit event is only spent for the account attribution ties it to', () =>
   // reported the account the user had just switched TO as spent, and the one
   // that actually ran out as ready.
   const unknown = classifyAccount(claudeProvider, a, [], opts);
-  assert.equal(unknown.state, 'active', 'bound, but not shown to be the one that ran out');
+  assert.equal(unknown.state, 'uncertain', 'bound, but not shown to be the one that ran out');
   assert.equal(unknown.unattributedLimits, 1, 'the event is surfaced, just not pinned on anyone');
 
   // With an observation covering it, the same event does make the account spent.
@@ -477,4 +477,43 @@ test('rename refuses a live session, a name that is already taken, and a bad nam
     (err: unknown) => err instanceof LifecycleError && err.code === 'invalid-name',
   );
   assert.ok(fs.existsSync(a.configDir));
+});
+
+test('an unplaceable limit makes every account uncertain, not ready', () => {
+  const a = account('.claude-work', { email: 'work@example.com' });
+  const now = Date.parse('2026-09-11T22:00:00.000Z');
+  const status = classifyAccount(claudeProvider, a, [], {
+    hosts: [],
+    limits: [limitEvent('2026-09-11T21:50:00.000Z')],
+    now,
+  });
+
+  // 'idle' would assert the account is fine, which is the claim that was wrong.
+  assert.equal(status.state, 'uncertain');
+  assert.equal(status.unattributedLimits, 1);
+  assert.match(status.reason, /cannot be ruled out/);
+});
+
+test('stating whose a limit was settles it for everyone', () => {
+  const mine = account('.claude-work', { email: 'work@example.com' });
+  const other = account('.claude-play', { email: 'play@example.com' });
+  const now = Date.parse('2026-09-11T22:00:00.000Z');
+  const opts = { hosts: [], limits: [limitEvent('2026-09-11T21:50:00.000Z')], now };
+
+  setStatedAttribution('abc', 'work');
+
+  assert.equal(classifyAccount(claudeProvider, mine, [], opts).state, 'spent',
+    'the account named owns it');
+  assert.equal(classifyAccount(claudeProvider, other, [], opts).state, 'idle',
+    'and everyone else is cleared, not left uncertain');
+});
+
+test('ruling an account out clears it without naming a culprit', () => {
+  const a = account('.claude-work', { email: 'work@example.com' });
+  const now = Date.parse('2026-09-11T22:00:00.000Z');
+  const opts = { hosts: [], limits: [limitEvent('2026-09-11T21:50:00.000Z')], now };
+
+  assert.equal(classifyAccount(claudeProvider, a, [], opts).state, 'uncertain');
+  setStatedAttribution('abc', null, { ruleOut: 'work' });
+  assert.equal(classifyAccount(claudeProvider, a, [], opts).state, 'idle');
 });

@@ -4,7 +4,7 @@ import path from 'node:path';
 import { sharedStore, backupsPath, exists } from './paths.ts';
 import { findLiveSessions, type LiveSession } from './sessions.ts';
 import { findLimitEvents, type LimitEvent } from './limits.ts';
-import { resolveAttribution } from './attribution.ts';
+import { resolveAttribution, statedExclusions } from './attribution.ts';
 import { loadSettings } from './settings.ts';
 import type { Account, Host, Provider } from './types.ts';
 
@@ -28,7 +28,14 @@ export type AccountState =
   /** Logged in, bound to nothing. */
   | 'idle'
   /** Logged in and out of quota for now. */
-  | 'spent';
+  | 'spent'
+  /**
+   * Logged in, and a limit was hit recently that nothing ties to an account —
+   * so this one cannot be ruled out. Distinct from 'idle' on purpose: 'idle'
+   * asserts the account is fine, and that assertion is exactly what was wrong
+   * when the account that had actually run out was shown as ready.
+   */
+  | 'uncertain';
 
 export interface AccountStatus {
   accountId: string;
@@ -182,21 +189,39 @@ export function classifyAccount(
     };
   }
 
+  const where = [
+    ...bound.map((h) => h.label),
+    ...mine.map((s) => `pid ${s.pid}${s.editorHint ? ` (${s.editorHint})` : ''}`),
+  ];
+
+  // An unplaceable limit means no account can be called fine. Saying so on
+  // every logged-in account is noisy, but it is true, and it resolves itself
+  // as the event ages out of the window.
+  if (unattributed) {
+    return {
+      ...base,
+      state: 'uncertain',
+      limit: null,
+      unattributedLimits: unattributed,
+      loginCommand: null,
+      reason: isBound
+        ? `in use by ${where.join(', ')}; a recent limit cannot be ruled out`
+        : 'logged in; a recent limit cannot be ruled out',
+      nextAction:
+        `A limit was hit recently and the history it came from does not record which account produced it, so this one cannot be cleared.` +
+        ` If you know it was this account, run \`baton limit ${account.id}\`; if it was not, \`baton limit ${account.id} --not\`.`,
+    };
+  }
+
   if (isBound) {
-    const where = [
-      ...bound.map((h) => h.label),
-      ...mine.map((s) => `pid ${s.pid}${s.editorHint ? ` (${s.editorHint})` : ''}`),
-    ];
     return {
       ...base,
       state: 'active',
       limit: null,
-      unattributedLimits: unattributed,
+      unattributedLimits: 0,
       loginCommand: null,
       reason: `in use by ${where.join(', ')}`,
-      nextAction: unattributed
-        ? `Nothing to do — this is the account in use.${unattributedNote(unattributed)}`
-        : 'Nothing to do — this is the account in use.',
+      nextAction: 'Nothing to do — this is the account in use.',
     };
   }
 
@@ -204,10 +229,10 @@ export function classifyAccount(
     ...base,
     state: 'idle',
     limit: null,
-    unattributedLimits: unattributed,
+    unattributedLimits: 0,
     loginCommand: null,
     reason: 'logged in, but no editor or session is pointing at it',
-    nextAction: `Point an editor at it with \`baton use ${account.id}\`, or remove it.${unattributedNote(unattributed)}`,
+    nextAction: `Point an editor at it with \`baton use ${account.id}\`, or remove it.`,
   };
 }
 
@@ -256,8 +281,13 @@ function limitsFor(
   const mine: LimitEvent[] = [];
   for (const e of fresh) {
     const who = resolveAttribution(e.sessionId, { cwd: e.cwd, at: e.at });
-    if (!who) unattributed++;
-    else if (who.accountId === account.id) mine.push(e);
+    if (who) {
+      if (who.accountId === account.id) mine.push(e);
+      continue;
+    }
+    // An account the user has ruled out is not merely unproven for this event,
+    // it is settled — so it stops counting against them.
+    if (!statedExclusions(e.sessionId).includes(account.id)) unattributed++;
   }
   return { mine: mine[0] ?? null, unattributed };
 }
