@@ -76,10 +76,22 @@
   </div>
 
 <script type="module">
+const $ = (id) => document.getElementById(id);
+
+// If the API is missing the whole script would otherwise throw on load, leaving
+// a dead window with no explanation. Say so on the page instead.
+if (!window.__TAURI__?.core?.invoke) {
+  $('store').textContent = 'Tauri API unavailable';
+  const el = $('msg');
+  el.className = 'err';
+  el.textContent =
+    'This page has to run inside the Baton app. If you are seeing this in the app, '
+    + 'the build is missing withGlobalTauri.';
+  throw new Error('Tauri API unavailable');
+}
+
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
-
-const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 

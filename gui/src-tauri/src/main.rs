@@ -8,30 +8,79 @@ use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager};
 
+/// Parse a `vX.Y.Z` directory name into something sortable.
+fn semver_key(name: &str) -> (u64, u64, u64) {
+    let mut it = name.trim_start_matches('v').split('.').map(|p| p.parse().unwrap_or(0));
+    (it.next().unwrap_or(0), it.next().unwrap_or(0), it.next().unwrap_or(0))
+}
+
+/// Newest Node installed by a version manager that keeps versions in one dir.
+fn newest_versioned_node(root: PathBuf, suffix: &str) -> Option<PathBuf> {
+    let mut versions: Vec<_> = std::fs::read_dir(root)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_name().to_string_lossy().starts_with('v'))
+        .collect();
+    versions.sort_by_key(|e| semver_key(&e.file_name().to_string_lossy()));
+    versions
+        .iter()
+        .rev()
+        .map(|e| e.path().join(suffix))
+        .find(|p| p.is_file())
+}
+
 /// Locate the Node binary.
 ///
-/// A macOS app launched from Finder inherits a bare PATH (`/usr/bin:/bin:...`),
-/// so Homebrew, nvm and fnm installs are all invisible to a plain `Command::new("node")`.
-/// Asking a login shell is the only reliable way to get the user's real PATH.
+/// A macOS app launched from Finder inherits a bare PATH, so a plain
+/// `Command::new("node")` fails for everyone using Homebrew or a version
+/// manager. Asking a shell is not enough either: nvm and fnm initialise in
+/// `.zshrc`, which a login-but-non-interactive shell never sources. So probe
+/// the known install locations directly first, and only then fall back to an
+/// interactive login shell.
 fn resolve_node() -> Result<String, String> {
     if let Ok(explicit) = std::env::var("BATON_NODE") {
-        return Ok(explicit);
+        if PathBuf::from(&explicit).is_file() {
+            return Ok(explicit);
+        }
+        return Err(format!("BATON_NODE points at {explicit}, which is not a file"));
     }
 
+    let home = PathBuf::from(std::env::var("HOME").unwrap_or_default());
+    let mut candidates: Vec<PathBuf> = vec![
+        PathBuf::from("/opt/homebrew/bin/node"), // Apple silicon Homebrew
+        PathBuf::from("/usr/local/bin/node"),    // Intel Homebrew, official pkg
+        PathBuf::from("/usr/bin/node"),
+        home.join(".volta/bin/node"),
+        home.join(".asdf/shims/node"),
+    ];
+    if let Some(p) = newest_versioned_node(home.join(".nvm/versions/node"), "bin/node") {
+        candidates.insert(0, p);
+    }
+    if let Some(p) = newest_versioned_node(home.join(".local/share/fnm/node-versions"), "installation/bin/node") {
+        candidates.insert(0, p);
+    }
+
+    if let Some(found) = candidates.iter().find(|p| p.is_file()) {
+        return Ok(found.to_string_lossy().into_owned());
+    }
+
+    // Last resort: an interactive login shell, which does source .zshrc.
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
-    let out = Command::new(&shell)
-        .args(["-lc", "command -v node"])
-        .output()
-        .map_err(|e| format!("could not start {shell}: {e}"))?;
-
-    let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if path.is_empty() {
-        return Err(
-            "Node.js was not found. Baton needs Node 22.18+ on your PATH, or set BATON_NODE."
-                .into(),
-        );
+    if let Ok(out) = Command::new(&shell).args(["-lic", "command -v node"]).output() {
+        let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if !path.is_empty() && PathBuf::from(&path).is_file() {
+            return Ok(path);
+        }
     }
-    Ok(path)
+
+    Err(format!(
+        "Node.js was not found. Baton needs Node 22.18+.\n\nLooked in: {}\n\nSet BATON_NODE to the output of `which node` if it lives elsewhere.",
+        candidates
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join(", ")
+    ))
 }
 
 /// Path to the bundled CLI, or an override for development.
