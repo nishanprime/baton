@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { sharedStore, exists, isSymlink, backupsPath } from './paths.ts';
+import { mergeFile } from './merge.ts';
 import type { Account, Provider } from './types.ts';
 
 export interface LinkAction {
@@ -10,6 +11,8 @@ export interface LinkAction {
     | 'relinked'
     | 'moved-to-store'
     | 'merged-into-store'
+    | 'combined-by-content'
+    | 'identical'
     | 'overwritten-by-store'
     | 'linked'
     | 'skipped';
@@ -19,14 +22,39 @@ export interface LinkAction {
 export interface LinkOptions {
   dryRun?: boolean;
   /**
-   * Entries the store already holds. Carried across accounts during a dry run
-   * so the preview reports the second account as a merge rather than repeating
-   * the first account's move.
+   * Entries the store already holds, mapped to the source path that seeded
+   * them. Carried across accounts during a dry run so the preview can compare
+   * against what the store *would* contain, since nothing is on disk yet.
    */
-  storeState?: Set<string>;
+  storeState?: Map<string, string>;
 }
 
 const MERGED_DIR = '_merged';
+
+/** What a file-vs-file collision would do, without doing it. */
+function predictFileMerge(src: string, dst: string): LinkAction['action'] {
+  if (!exists(dst)) return 'moved-to-store';
+  try {
+    if (fs.readFileSync(src, 'utf8') === fs.readFileSync(dst, 'utf8')) return 'identical';
+  } catch {
+    return 'overwritten-by-store';
+  }
+  const ext = path.extname(src).toLowerCase();
+  return ext === '.json' || ext === '.md' ? 'combined-by-content' : 'overwritten-by-store';
+}
+
+function describe(action: LinkAction['action'], dst: string): string {
+  switch (action) {
+    case 'identical':
+      return 'same content as the store copy';
+    case 'combined-by-content':
+      return 'contents combined; conflicting values keep the store copy';
+    case 'overwritten-by-store':
+      return 'store copy wins; this one is backed up, not merged';
+    default:
+      return `-> ${dst}`;
+  }
+}
 
 /** Snapshot a path into the backups tree before it is moved or removed. */
 function backupEntry(src: string, tag: string): string {
@@ -50,7 +78,9 @@ function mergeInto(src: string, dst: string, tag: string): void {
 
   if (!st.isDirectory()) {
     if (exists(dst)) {
-      backupEntry(src, tag); // dst wins, but keep the loser recoverable
+      // Try a content-aware combine before falling back to "store wins".
+      backupEntry(src, tag);
+      mergeFile(src, dst);
       fs.rmSync(src, { force: true });
     } else {
       fs.mkdirSync(path.dirname(dst), { recursive: true });
@@ -112,15 +142,21 @@ export function linkAccount(
 
     const srcExists = exists(src);
     const dstExists = exists(dst) || (opts.storeState?.has(entry) ?? false);
+    // During a dry run the store is empty, so compare against whichever file
+    // would have seeded it.
+    const compareAgainst = exists(dst) ? dst : (opts.storeState?.get(entry) ?? dst);
     const srcIsDir = srcExists && fs.statSync(src).isDirectory();
     // Only entries that actually reach the store count, or a dry run would
     // predict links for entries that exist nowhere.
-    if (srcExists) opts.storeState?.add(entry);
+    if (srcExists && !opts.storeState?.has(entry)) opts.storeState?.set(entry, src);
 
     if (!srcExists && !dstExists) {
       actions.push({ entry, action: 'skipped', detail: 'not present in either' });
       continue;
     }
+
+    const fileAction =
+      srcExists && dstExists && !srcIsDir ? predictFileMerge(src, compareAgainst) : 'moved-to-store';
 
     if (srcExists) {
       if (opts.dryRun) {
@@ -130,26 +166,15 @@ export function linkAccount(
           ? 'moved-to-store'
           : srcIsDir
             ? 'merged-into-store'
-            : 'overwritten-by-store';
-        actions.push({
-          entry,
-          action,
-          detail:
-            action === 'overwritten-by-store'
-              ? 'store copy wins; this one is backed up, not merged'
-              : `-> ${dst}`,
-        });
+            : predictFileMerge(src, compareAgainst);
+        actions.push({ entry, action, detail: describe(action, dst) });
         continue;
       }
       backupEntry(src, `${account.id}-prelink`);
       mergeInto(src, dst, `${account.id}-conflict`);
       actions.push({
         entry,
-        action: !dstExists
-          ? 'moved-to-store'
-          : srcIsDir
-            ? 'merged-into-store'
-            : 'overwritten-by-store',
+        action: !dstExists ? 'moved-to-store' : srcIsDir ? 'merged-into-store' : fileAction,
       });
     }
 

@@ -3,6 +3,7 @@ import { PROVIDERS, getProvider, defaultProvider } from './core/registry.ts';
 import { linkAccount, unlinkAccount } from './core/share.ts';
 import { switchHost } from './core/switch.ts';
 import { appHome, sharedStore } from './core/paths.ts';
+import { runSetup, createAccount, loginHint } from './core/setup.ts';
 import type { Account, Host, Provider } from './core/types.ts';
 
 const argv = process.argv.slice(2);
@@ -104,12 +105,13 @@ function cmdLink(): void {
   const targets = flags.has('--all') || !key ? accounts : [findAccount(accounts, key)];
 
   // Shared across accounts so a dry run predicts merges the way a real run does.
-  const storeState = new Set<string>();
+  const storeState = new Map<string, string>();
   for (const a of targets) {
     console.log(`${bold(a.id)} ${dim(a.configDir)}`);
     for (const act of linkAccount(provider, a, { dryRun, storeState })) {
       if (act.action === 'skipped') continue;
-      const mark = act.action === 'overwritten-by-store' ? yellow('!') : dryRun ? yellow('·') : green('✓');
+      const mark =
+        act.action === 'overwritten-by-store' ? yellow('!') : dryRun ? yellow('·') : green('✓');
       console.log(`  ${mark} ${act.entry.padEnd(18)} ${dim(act.action)}${act.detail ? dim(` — ${act.detail}`) : ''}`);
     }
   }
@@ -152,9 +154,22 @@ function cmdDoctor(): void {
   console.log(problems ? `\n${problems} issue(s).` : green('✓ everything consistent.'));
 }
 
+function cmdAdd(): void {
+  const provider = resolveProvider();
+  const name = positional[1];
+  if (!name) throw new Error('Usage: baton add <name>');
+  const dir = createAccount(provider, name);
+  console.log(`${green('✓')} Created ${dir}`);
+  console.log(`\nLog into it with:\n  ${bold(loginHint(provider, dir))}`);
+  console.log(dim('Then run /login inside that session.'));
+  console.log(dim(`\nAfterwards: baton link ${name}  &&  baton use ${name} --all`));
+}
+
 const HELP = `${bold('baton')} — switch AI coding accounts across editors, keeping one shared history.
 
+  baton setup                     guided first-time walkthrough
   baton status                    show accounts, editors, and what points where
+  baton add <name>                create a new account directory to log into
   baton use <account> [opts]      point an editor at an account
   baton link [account|--all]      share history across accounts (run once)
   baton unlink <account>          restore an account to standalone files
@@ -167,9 +182,11 @@ Options
   --dry-run        print what would change, write nothing
 `;
 
-try {
+async function main(): Promise<void> {
   switch (positional[0]) {
     case 'status': case undefined: cmdStatus(); break;
+    case 'setup': await runSetup(resolveProvider()); break;
+    case 'add': cmdAdd(); break;
     case 'use': cmdUse(); break;
     case 'link': cmdLink(); break;
     case 'unlink': cmdUnlink(); break;
@@ -180,7 +197,9 @@ try {
       console.log(HELP);
       process.exit(1);
   }
-} catch (err) {
-  console.error(`\x1b[31m${(err as Error).message}\x1b[0m`);
-  process.exit(1);
 }
+
+main().catch((err: Error) => {
+  console.error(`\x1b[31m${err.message}\x1b[0m`);
+  process.exit(1);
+});
