@@ -202,3 +202,26 @@ code { background:var(--card); padding:1px 5px; border-radius:4px; font-size:11p
 .plan ul { margin:5px 0 0; padding-left:16px; color:var(--muted); }
 .plan li { overflow-wrap:anywhere; margin-bottom:2px; }
 .plan .name { font-size:12px; }
+
+/* First-run checklist. Disappears on its own once the steps are done, so it
+   never becomes furniture for an established install. */
+.firstrun {
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--accent) 7%, var(--card));
+  padding: 11px 12px;
+  margin-bottom: 14px;
+}
+.firstrun-head {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 7px; font-size: 12.5px;
+}
+.firstrun-steps { margin: 0; padding-left: 18px; display: grid; gap: 7px; }
+.firstrun-steps li { font-size: 12px; }
+.fr-title { display: block; font-weight: 600; }
+.fr-detail { display: block; color: var(--muted); font-size: 11.5px; }
+.linkbtn {
+  background: none; border: 0; padding: 0; cursor: pointer;
+  color: var(--muted); font: inherit; font-size: 11.5px; text-decoration: underline;
+}
+.linkbtn:hover { color: var(--fg); }

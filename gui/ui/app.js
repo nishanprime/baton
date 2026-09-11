@@ -13,6 +13,11 @@ if (!window.__TAURI__?.core?.invoke) {
   throw new Error('no tauri');
 }
 const { invoke } = window.__TAURI__.core;
+
+// Per-viewer convenience only; the checklist disappears on its own once the
+// steps are done, so losing this just means seeing it again.
+let introDismissed = false;
+try { introDismissed = localStorage.getItem('baton.introDismissed') === '1'; } catch { /* private window */ }
 const { listen } = window.__TAURI__.event;
 
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) =>
@@ -536,6 +541,7 @@ const PAGE = 25;
 
 const state = {
   tab: 'accounts',
+  dismissedFirstRun: introDismissed,
   status: null,
   cfg: null,
   accounts: null,
@@ -1012,6 +1018,70 @@ function unavailableSection() {
       </div></div>`).join('')}`;
 }
 
+/**
+ * What a new install still needs, as an ordered checklist.
+ *
+ * The CLI has a guided setup; someone who only ever opens the app never sees
+ * it, and pooling in particular is invisible until it has already happened.
+ * This says what the remaining steps are and stops appearing once they are done.
+ */
+function firstRunSteps() {
+  const list = state.accounts ?? [];
+  const provider = state.status?.providers?.[0];
+  const hosts = provider?.hosts ?? [];
+  const loggedIn = list.filter((a) => a.state !== 'draft');
+  const pooled = list.filter((a) => (a.boundHosts ?? []).length || a.state !== 'draft');
+
+  const steps = [];
+  if (loggedIn.length < 2) {
+    steps.push({
+      done: false,
+      title: 'Add a second account',
+      detail: 'Switching needs somewhere to switch to. Baton creates the directory; the login happens in Claude Code.',
+    });
+  }
+  if (list.some((a) => a.state === 'draft')) {
+    steps.push({
+      done: false,
+      title: 'Finish logging in',
+      detail: 'An account with no login is a dead end — an editor can point at it but cannot use it. Each card shows its own command.',
+    });
+  }
+  if (!state.status?.pooled && pooled.length) {
+    steps.push({
+      done: false,
+      title: 'Pool your history',
+      detail: 'One shared store every account reads, so switching never costs you a conversation. Backed up first, and reversible.',
+    });
+  }
+  if (hosts.length && !hosts.some((h) => h.accountId)) {
+    steps.push({
+      done: false,
+      title: 'Point an editor at an account',
+      detail: 'On the Editors tab. Terminal-only works too — see baton init in the README.',
+    });
+  }
+  return steps;
+}
+
+function viewFirstRun() {
+  if (state.dismissedFirstRun) return '';
+  const steps = firstRunSteps();
+  if (!steps.length) return '';
+
+  return `
+    <div class="firstrun">
+      <div class="firstrun-head">
+        <strong>Getting set up</strong>
+        <button class="linkbtn" id="skipIntro" type="button">Dismiss</button>
+      </div>
+      <ol class="firstrun-steps">
+        ${steps.map((s) => `<li><span class="fr-title">${esc(s.title)}</span>
+          <span class="fr-detail">${esc(s.detail)}</span></li>`).join('')}
+      </ol>
+    </div>`;
+}
+
 function viewAccounts() {
   const blocked = gate('accounts', HAVE.accounts() && HAVE.status(), 'Accounts');
   if (blocked) return blocked;
@@ -1024,6 +1094,7 @@ function viewAccounts() {
         'Add account… creates the config directory. Logging in happens in Claude Code itself, so no credential passes through Baton.');
 
   return `
+    ${viewFirstRun()}
     <h2>Accounts <span class="count">${list.length}${drafts ? ` · ${drafts} waiting on a login` : ''}</span></h2>
     ${cards}
     <div class="actions">
@@ -1102,6 +1173,14 @@ async function checkFlow() {
 }
 
 function wireAccounts() {
+  const skip = $('skipIntro');
+  if (skip) {
+    skip.onclick = () => {
+      state.dismissedFirstRun = true;
+      try { localStorage.setItem('baton.introDismissed', '1'); } catch { /* private window */ }
+      render();
+    };
+  }
   for (const b of qsa('[data-menu]')) {
     b.onclick = () => {
       if (liveMenu?.anchor === b) {
