@@ -1,8 +1,25 @@
-# Baton
+<img src="docs/assets/banner.svg" alt="Baton — switch AI coding accounts without losing your history" width="100%">
+
+<p>
+  <img alt="MIT licence" src="https://img.shields.io/badge/licence-MIT-blue">
+  <img alt="Node 22.18+" src="https://img.shields.io/badge/node-%3E%3D22.18-brightgreen">
+  <img alt="macOS, Linux, Windows" src="https://img.shields.io/badge/macOS%20%C2%B7%20Linux%20%C2%B7%20Windows-lightgrey">
+</p>
 
 Switch between multiple AI coding accounts — in your editors and in your terminal — keeping **one shared conversation history**.
 
 When a subscription hits its limit mid-task, pass the baton: point at another account, reload the window, and `--resume` the exact same conversation. No re-explaining context, no manually editing config paths.
+
+```bash
+git clone https://github.com/nishanprime/baton.git
+cd baton && pnpm start
+```
+
+`pnpm start` checks what your machine needs, installs what is missing, and opens the app. It offers to install Rust for the desktop app; decline and you get a working command line rather than an error. Needs [Node 22.18+](https://nodejs.org).
+
+Everything it does is previewed before it happens, every writing command takes `--dry-run`, and `baton uninstall` puts every file back.
+
+> **Installing a `.dmg` someone sent you?** It is not notarised, so macOS blocks it with a misleading "damaged" dialog. [docs/INSTALL.md](docs/INSTALL.md) explains why and what to do. Building from source avoids it entirely.
 
 ## The problem
 
@@ -25,9 +42,7 @@ So switching accounts is only ever a change of identity. Your work stays exactly
 
 **Baton never reads or writes your credentials.** On macOS those live in the system Keychain, keyed per config directory; elsewhere they're a file inside it. Either way they travel with the directory on their own — Baton just changes which directory is selected.
 
-## Quick start
-
-**Requires Node 22.18+** (for native TypeScript execution). Check with `node --version`.
+## Install
 
 ```bash
 git clone https://github.com/nishanprime/baton.git
