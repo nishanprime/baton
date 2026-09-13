@@ -1,10 +1,12 @@
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import {
   classifyAccount,
+  loginCommandForDir,
   reauthCommand,
   removeAccount,
   canRemoveAccount,
@@ -517,4 +519,41 @@ test('ruling an account out clears it without naming a culprit', () => {
   setStatedAttribution('abc', null, { ruleOut: 'work' });
   assert.equal(classifyAccount(claudeProvider, a, [], opts).unattributedLimits, 0,
     'ruling out clears the count for this account');
+});
+
+test('the login command carries no operating system username', () => {
+  // It is the one string in the UI meant to be copied out — into a terminal, a
+  // chat, a screenshot. Printing an absolute path put the OS username in every
+  // one of those. Uses a real home-relative path, since that is the case the
+  // rewriting applies to; the sandbox accounts live under a temp dir.
+  const cmd = loginCommandForDir(claudeProvider, path.join(os.homedir(), '.claude-work'));
+  assert.ok(!cmd.includes(os.homedir()), `home path leaked: ${cmd}`);
+  assert.match(cmd, /\$HOME/);
+});
+
+test('a home-relative login command still resolves to the real directory', () => {
+  // ~ cannot be used: inside the quotes the path needs for spaces it does not
+  // expand, so the command would look right and fail.
+  const dir = path.join(os.homedir(), '.claude-testing new');
+  const cmd = loginCommandForDir(claudeProvider, dir);
+  assert.ok(!cmd.includes('~'), 'a tilde would not expand inside quotes');
+  const out = execFileSync('sh', ['-c', `${cmd.replace(/ claude$/, '')} printenv CLAUDE_CONFIG_DIR`], {
+    encoding: 'utf8',
+  }).trim();
+  assert.equal(out, dir, 'expands back to exactly the right directory');
+});
+
+test('shell metacharacters in a directory name stay literal', () => {
+  const dir = path.join(os.homedir(), '.claude-a$b`c"d');
+  const cmd = loginCommandForDir(claudeProvider, dir);
+  const out = execFileSync('sh', ['-c', `${cmd.replace(/ claude$/, '')} printenv CLAUDE_CONFIG_DIR`], {
+    encoding: 'utf8',
+  }).trim();
+  assert.equal(out, dir, 'nothing expanded or executed');
+});
+
+test('a directory outside home keeps its absolute path', () => {
+  const cmd = loginCommandForDir(claudeProvider, '/opt/elsewhere');
+  assert.ok(!cmd.includes('$HOME'));
+  assert.match(cmd, /'\/opt\/elsewhere'/);
 });

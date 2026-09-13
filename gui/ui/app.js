@@ -1015,7 +1015,13 @@ function accountCard(a) {
   for (const host of a.boundHosts ?? []) tags.push(`<span class="tag">${esc(host.label)}</span>`);
   const live = a.liveSessions?.length ?? 0;
   if (live) tags.push(`<span class="tag accent">${plural(live, 'live session')}</span>`);
-  if (a.hasAlias) tags.push(`<span class="tag grey">id: ${esc(a.accountId)}</span>`);
+  // The id is here so you know what to type at the CLI — but it is the real
+  // account name, and showing it beside an alias defeated the alias entirely.
+  // Privacy mode exists for screenshots, so under it the id is the one thing
+  // that must not be on screen.
+  if (a.hasAlias && !state.settings?.display?.hideEmails) {
+    tags.push(`<span class="tag grey">id: ${esc(a.accountId)}</span>`);
+  }
   const resets = a.state === 'spent' ? a.limit?.resets : null;
 
   return `

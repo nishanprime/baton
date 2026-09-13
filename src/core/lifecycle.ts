@@ -303,12 +303,32 @@ function psQuote(s: string): string {
 }
 
 /** The command that logs a given config directory in, without an Account in hand. */
+/**
+ * Write a path under the home directory as $HOME/..., correctly escaped.
+ *
+ * This command is the one thing in the UI that is meant to be copied out and
+ * pasted somewhere — into a terminal, a chat, a screenshot — so it should not
+ * carry the operating system username along with it. `~` cannot do the job:
+ * inside the single quotes the path needs for spaces, a tilde does not expand,
+ * so the command would look right and fail. Double quotes expand $HOME, which
+ * means every character with a meaning inside them has to be escaped.
+ */
+function homeRelative(configDir: string): string | null {
+  const home = os.homedir();
+  if (!configDir.startsWith(home + path.sep)) return null;
+  const rest = configDir.slice(home.length + 1);
+  return `"$HOME/${rest.replace(/([\\"$`])/g, '\\$1')}"`;
+}
+
 export function loginCommandForDir(provider: Provider, configDir: string): string {
   const bin = provider.processName ?? provider.id;
   if (process.platform === 'win32') {
-    return `$env:${provider.envVar}=${psQuote(configDir)}; ${bin}`;
+    const rel = configDir.startsWith(os.homedir() + path.sep)
+      ? `"$env:USERPROFILE\\${configDir.slice(os.homedir().length + 1).replace(/"/g, '`"')}"`
+      : psQuote(configDir);
+    return `$env:${provider.envVar}=${rel}; ${bin}`;
   }
-  return `${provider.envVar}=${shQuote(configDir)} ${bin}`;
+  return `${provider.envVar}=${homeRelative(configDir) ?? shQuote(configDir)} ${bin}`;
 }
 
 /**
@@ -324,7 +344,7 @@ export function reauthCommand(provider: Provider, account: Account): LoginComman
     command,
     explanation:
       `Run this in ${shell}, then \`/login\` inside the session it opens. ` +
-      `It starts ${provider.label} against ${account.configDir}, so the login lands in ` +
+      `It starts ${provider.label} against that directory, so the login lands there ` +
       `that directory and nowhere else. Baton never sees the credential.`,
   };
 }
