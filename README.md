@@ -44,11 +44,12 @@ So switching accounts is only ever a change of identity. Your work stays exactly
 
 ## Install
 
+`pnpm start` above does everything. If you would rather drive it yourself:
+
 ```bash
-git clone https://github.com/nishanprime/baton.git
-cd baton
-pnpm install
-node src/cli.ts setup
+pnpm install     # dependencies only
+pnpm setup       # the guided walkthrough
+pnpm build       # the desktop app (needs Rust)
 ```
 
 `setup` is a guided walkthrough. It:
