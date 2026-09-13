@@ -17,10 +17,10 @@ const settings = (over = {}) => ({
 
 test('a masked email keeps only the first letter and the tld', () => {
   const out = maskEmail('dana@northwind.com');
-  assert.ok(out.startsWith('n'), 'keeps the first letter as a hint');
+  assert.ok(out.startsWith('d'), 'keeps the first letter as a hint');
   assert.ok(out.endsWith('.com'), 'keeps the tld');
-  assert.ok(!out.includes('work'), 'domain is hidden');
-  assert.ok(!out.includes('ishan'), 'local part is hidden');
+  assert.ok(!out.includes('northwind'), 'domain is hidden');
+  assert.ok(!out.includes('ana'), 'local part is hidden');
 });
 
 test('masking a missing email says so rather than producing junk', () => {
