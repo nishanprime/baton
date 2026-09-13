@@ -163,23 +163,3 @@ Properties of the data, not missing effort. State them in the UI.
    comparison with a real input or drop the idea.
 5. §2.6 — packaging, once there is someone to hand a build to.
 
----
-
-## 6. Machine state to be aware of
-
-- History is pooled for **3 of 5** accounts: `~/.claude`, `~/.claude-work` and
-  `~/.claude-personal` symlink into `~/.baton/shared/claude`. The two
-  drafts have nothing to pool.
-- Two draft accounts are still here and unusable: `~/.claude-test` and
-  `~/.claude-testing new` (the space in that one breaks naive path handling —
-  which makes it a useful test fixture, an argument for keeping one of them).
-- Both editors are on `work`, which is currently **spent**: it hit its limit
-  and reports a reset time.
-- Backups: 18 snapshots, 258MB, of which **16 have no manifest** — they predate
-  the retention work, so they list as degraded and cannot be restored
-  path-by-path. The two labelled `switch:work` are the new shape: one
-  directory per operation, every entry in it, restorable. Nothing is over
-  budget, so nothing prunes the old ones automatically.
-- Nine transcripts were lost and restored during the pooling fix (`6e17b7e`).
-  The pre-Baton backup that made that recovery possible was in a session
-  scratchpad; if a durable copy has not been made yet, make one.
